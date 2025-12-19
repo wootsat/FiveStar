@@ -12,14 +12,13 @@ import {
 
 // --- CONFIGURATION ---
 
-// TODO: PASTE YOUR FIREBASE CONFIG HERE
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT_ID.firebasestorage.app",
-  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyBuq1tHxrV8sikf78yWP7cvtrijZZz0KJQ",
+  authDomain: "fivestar-398be.firebaseapp.com",
+  projectId: "fivestar-398be",
+  storageBucket: "fivestar-398be.firebasestorage.app",
+  messagingSenderId: "230644568836",
+  appId: "1:230644568836:web:8bcd907a4985d54be53651"
 };
 
 const ADMIN_CODE = "admin123";
