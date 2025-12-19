@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  TrendingUp, Trophy, Plus, Minus, RefreshCw, Shield, Crown, PlayCircle, Lock
+  TrendingUp, Trophy, Plus, Minus, RefreshCw, Shield, Crown, PlayCircle, Lock, LogOut
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
-  getAuth, signInAnonymously, onAuthStateChanged 
+  getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut 
 } from 'firebase/auth';
 import { 
   getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, writeBatch 
@@ -13,8 +13,6 @@ import {
 // --- CONFIGURATION ---
 
 // TODO: PASTE YOUR FIREBASE CONFIG HERE
-// 1. Go to console.firebase.google.com
-// 2. Create a project > Click the Web icon (</>) > Copy the config object
 const firebaseConfig = {
   apiKey: "YOUR_API_KEY",
   authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
@@ -94,6 +92,12 @@ export default function FiveStarApp() {
   const [leagueState, setLeagueState] = useState(null);
   const [players, setPlayers] = useState([]);
   
+  // Auth State
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isSignUp, setIsSignUp] = useState(false);
+
+  // Profile Creation State
   const [loginName, setLoginName] = useState('');
   const [loginCode, setLoginCode] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -101,8 +105,7 @@ export default function FiveStarApp() {
   // --- Auth & Data Listeners ---
 
   useEffect(() => {
-    // Sign in anonymously on load
-    signInAnonymously(auth).catch(err => console.error("Auth Error:", err));
+    // Listen for auth state changes (no auto sign-in)
     return onAuthStateChanged(auth, setUser);
   }, []);
 
@@ -144,7 +147,22 @@ export default function FiveStarApp() {
 
   // --- Actions ---
 
-  const handleLogin = async (e) => {
+  const handleAuth = async (e) => {
+    e.preventDefault();
+    setIsProcessing(true);
+    try {
+      if (isSignUp) {
+        await createUserWithEmailAndPassword(auth, email, password);
+      } else {
+        await signInWithEmailAndPassword(auth, email, password);
+      }
+    } catch (err) {
+      alert(err.message);
+    }
+    setIsProcessing(false);
+  };
+
+  const handleCreateProfile = async (e) => {
     e.preventDefault();
     if (!loginName.trim() || !user) return;
     setIsProcessing(true);
@@ -282,17 +300,59 @@ export default function FiveStarApp() {
 
   // --- Views ---
 
+  // 1. Auth View (Login/Sign Up)
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
+        <div className="w-full max-w-md bg-slate-900 border border-slate-800 p-8 rounded-2xl">
+          <div className="flex justify-center mb-6">
+            <div className="w-16 h-16 bg-emerald-500/20 rounded-2xl flex items-center justify-center">
+              <TrendingUp size={40} className="text-emerald-500" />
+            </div>
+          </div>
+          <h1 className="text-2xl font-bold text-white text-center mb-6">FiveStar Login</h1>
+          <form onSubmit={handleAuth} className="space-y-4">
+            <input 
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full bg-slate-800 border border-slate-700 text-white px-4 py-3 rounded-xl"
+              placeholder="Email Address"
+              required
+            />
+            <input 
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full bg-slate-800 border border-slate-700 text-white px-4 py-3 rounded-xl"
+              placeholder="Password"
+              required
+            />
+            <button disabled={isProcessing} className="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-bold py-3 rounded-xl transition-colors">
+              {isProcessing ? 'Processing...' : (isSignUp ? 'Sign Up' : 'Login')}
+            </button>
+            <button type="button" onClick={() => setIsSignUp(!isSignUp)} className="w-full text-slate-400 text-sm hover:text-white transition-colors">
+              {isSignUp ? 'Already have an account? Login' : 'Need an account? Sign Up'}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. Profile Creation View (Join League)
   if (!userProfile) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
         <div className="w-full max-w-md bg-slate-900 border border-slate-800 p-8 rounded-2xl">
-          <h1 className="text-2xl font-bold text-white text-center mb-6">Join League</h1>
-          <form onSubmit={handleLogin} className="space-y-4">
+          <h1 className="text-2xl font-bold text-white text-center mb-6">Create Profile</h1>
+          <form onSubmit={handleCreateProfile} className="space-y-4">
             <input 
               value={loginName}
               onChange={(e) => setLoginName(e.target.value)}
               className="w-full bg-slate-800 border border-slate-700 text-white px-4 py-3 rounded-xl"
-              placeholder="Player Name"
+              placeholder="Enter Your Player Name"
+              required
             />
             <input 
               type="password"
@@ -301,8 +361,11 @@ export default function FiveStarApp() {
               className="w-full bg-slate-800 border border-slate-700 text-white px-4 py-3 rounded-xl"
               placeholder="Admin Code (Optional)"
             />
-            <button disabled={!loginName} className="w-full bg-emerald-500 text-slate-900 font-bold py-3 rounded-xl">
-              {isProcessing ? 'Joining...' : 'Enter'}
+            <button disabled={!loginName || isProcessing} className="w-full bg-emerald-500 text-slate-900 font-bold py-3 rounded-xl">
+              {isProcessing ? 'Creating...' : 'Start Playing'}
+            </button>
+            <button type="button" onClick={() => signOut(auth)} className="w-full text-slate-500 text-sm">
+              Cancel / Log Out
             </button>
           </form>
         </div>
@@ -310,6 +373,7 @@ export default function FiveStarApp() {
     );
   }
 
+  // 3. Main Dashboard View
   const myMatchup = leagueState?.matchups?.find(m => m.p1 === user.uid || m.p2 === user.uid);
   const isDrafting = leagueState?.status === 'drafting';
 
@@ -323,9 +387,12 @@ export default function FiveStarApp() {
             <div className="text-xs text-slate-500">{userProfile.name} {userProfile.isAdmin && '(Admin)'}</div>
           </div>
         </div>
-        <div className="text-right">
-          <div className="text-[10px] text-slate-500 uppercase font-bold">Month</div>
-          <div className="font-mono font-bold leading-none">{leagueState?.month || 1}</div>
+        <div className="flex items-center gap-3">
+          <div className="text-right">
+            <div className="text-[10px] text-slate-500 uppercase font-bold">Month</div>
+            <div className="font-mono font-bold leading-none">{leagueState?.month || 1}</div>
+          </div>
+          <button onClick={() => signOut(auth)} className="bg-slate-800 p-2 rounded-lg text-slate-400 hover:text-white"><LogOut size={16}/></button>
         </div>
       </header>
 
