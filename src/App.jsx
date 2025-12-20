@@ -4,10 +4,10 @@ import {
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
-  getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut, signInAnonymously, signInWithCustomToken
+  getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut 
 } from 'firebase/auth';
 import { 
-  getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, writeBatch, getDoc, query, where, deleteDoc, getDocs
+  getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, writeBatch, getDoc, query, where, deleteDoc, getDocs 
 } from 'firebase/firestore';
 
 // --- CONFIGURATION ---
@@ -77,10 +77,10 @@ export default function FiveStarApp() {
   const [user, setUser] = useState(null);
   
   // Data States
-  const [memberships, setMemberships] = useState([]); // All leagues user is in
-  const [activeMembership, setActiveMembership] = useState(null); // The currently selected league player doc
-  const [activeLeague, setActiveLeague] = useState(null); // The currently selected league doc
-  const [leaguePlayers, setLeaguePlayers] = useState([]); // All players in active league
+  const [memberships, setMemberships] = useState([]); 
+  const [activeMembership, setActiveMembership] = useState(null); 
+  const [activeLeague, setActiveLeague] = useState(null); 
+  const [leaguePlayers, setLeaguePlayers] = useState([]); 
   const [masterStocks, setMasterStocks] = useState([]);
   
   // Navigation State
@@ -117,11 +117,9 @@ export default function FiveStarApp() {
   // --- 1. Authentication ---
 
   useEffect(() => {
-    // Auth Listener
     const unsub = onAuthStateChanged(auth, async (u) => {
       setUser(u);
       if (u) {
-        // Check for existing profile in this environment
         const userDoc = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', u.uid));
         if (userDoc.exists()) {
           setHasProfile(true);
@@ -139,7 +137,6 @@ export default function FiveStarApp() {
 
   // --- 2. Data Listeners ---
 
-  // A. Listen for ALL memberships for this user (Cross-League)
   useEffect(() => {
     if (!user || !hasProfile) return;
     const q = query(
@@ -156,7 +153,6 @@ export default function FiveStarApp() {
     return unsub;
   }, [user, hasProfile]);
 
-  // B. Listen for ACTIVE League Data & Players
   useEffect(() => {
     if (!activeMembership) return;
 
@@ -166,7 +162,6 @@ export default function FiveStarApp() {
             setActiveLeague(docSnap.data());
             if (!newLeagueNameSetting) setNewLeagueNameSetting(docSnap.data().name);
         } else {
-            // League deleted
             setActiveLeague(null);
             setActiveMembership(null);
             setLeaguePlayers([]);
@@ -192,13 +187,13 @@ export default function FiveStarApp() {
     };
   }, [activeMembership?.leagueId]);
 
-  // C. Listen to Stocks (Global)
   useEffect(() => {
     const stocksRef = collection(db, 'artifacts', appId, 'public', 'data', 'stocks');
     const unsub = onSnapshot(stocksRef, (snapshot) => {
       const list = snapshot.docs.map(d => d.data());
-      // REMOVED: Automatic seeding of INITIAL_STOCKS
-      // Admin must manually add stocks
+      if (list.length === 0) {
+        INITIAL_STOCKS.forEach(s => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'stocks', s.id), s));
+      }
       setMasterStocks(list);
     });
     return unsub;
@@ -261,13 +256,15 @@ export default function FiveStarApp() {
       if (isSignUp) {
         if (!loginName) throw new Error("Name required.");
         const cred = await createUserWithEmailAndPassword(auth, email, password);
-        // Create user profile
         await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', cred.user.uid), { 
             name: loginName, 
             email: email 
         });
+        setHasProfile(true);
       } else {
-        await signInWithEmailAndPassword(auth, email, password);
+        const cred = await signInWithEmailAndPassword(auth, email, password);
+        const userDoc = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', cred.user.uid));
+        if (userDoc.exists()) setHasProfile(true);
       }
     } catch (err) { 
         alert(err.message); 
@@ -282,7 +279,7 @@ export default function FiveStarApp() {
       try {
           await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', newLeagueId), {
               id: newLeagueId, name: createLeagueName, adminUid: user.uid,
-              month: 4, activeStockIds: ['AAPL', 'MSFT', 'TSLA', 'NVDA'],
+              month: 4, activeStockIds: [], 
               status: 'drafting', schedule: {}, matchups: [], startingPrices: {}, createdAt: Date.now()
           });
           
@@ -363,16 +360,13 @@ export default function FiveStarApp() {
       setShowProfile(false);
   };
 
-  // --- DELETE LEAGUE FUNCTIONALITY ---
   const handleDeleteLeague = async () => {
     if (!activeMembership?.isAdmin) return;
     if (confirm("Are you sure you want to PERMANENTLY DELETE this league? This action cannot be undone.")) {
         setIsProcessing(true);
         try {
-            // 1. Delete the League Document
             await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId));
             
-            // 2. Delete all players associated with this league to clean up
             const batch = writeBatch(db);
             const playersQ = query(
                 collection(db, 'artifacts', appId, 'public', 'data', 'league_players'), 
@@ -382,7 +376,6 @@ export default function FiveStarApp() {
             playerSnaps.forEach(d => batch.delete(d.ref));
             await batch.commit();
 
-            // 3. Reset local state
             setMemberships(prev => prev.filter(m => m.leagueId !== activeMembership.leagueId));
             setActiveMembership(null);
             setActiveLeague(null);
@@ -392,6 +385,54 @@ export default function FiveStarApp() {
         }
         setIsProcessing(false);
     }
+  };
+
+  // --- ADMIN: MATCHUP & STATS EDITING ---
+
+  const handleUpdateMatchup = async (index, field, value) => {
+    if (!activeLeague || !activeMembership?.isAdmin) return;
+    const newMatchups = [...(activeLeague.matchups || [])];
+    
+    // Update the field
+    newMatchups[index] = { ...newMatchups[index], [field]: value };
+
+    // Update names for display consistency
+    if (field === 'p1' || field === 'p2') {
+         const p = leaguePlayers.find(player => player.userId === value);
+         const nameField = field === 'p1' ? 'p1Name' : 'p2Name';
+         newMatchups[index][nameField] = p ? p.name : 'BYE';
+         
+         const scoreField = field === 'p1' ? 'p1Score' : 'p2Score';
+         if (value === 'BYE') newMatchups[index][scoreField] = 0;
+    }
+
+    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), { matchups: newMatchups });
+  };
+
+  const handleAddMatchup = async () => {
+    if (!activeLeague || !activeMembership?.isAdmin) return;
+    const newMatchups = [...(activeLeague.matchups || [])];
+    newMatchups.push({
+        p1: 'BYE', p1Name: 'Select Player',
+        p2: 'BYE', p2Name: 'Select Player',
+        p1Score: 0, p2Score: 0,
+        type: 'Custom Matchup'
+    });
+    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), { matchups: newMatchups });
+  };
+
+  const handleDeleteMatchup = async (index) => {
+    if (!activeLeague || !activeMembership?.isAdmin) return;
+    if (!confirm("Delete this matchup?")) return;
+    const newMatchups = [...(activeLeague.matchups || [])];
+    newMatchups.splice(index, 1);
+    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), { matchups: newMatchups });
+  };
+
+  const handleUpdatePlayerStats = async (playerId, field, value) => {
+      const val = parseInt(value);
+      if (isNaN(val)) return;
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'league_players', playerId), { [field]: val });
   };
 
   // --- 5. Game Logic ---
@@ -427,7 +468,7 @@ export default function FiveStarApp() {
     if (!activeMembership?.isPlayer) return;
     const roster = activeMembership.roster || [];
     if (roster.find((i) => i.id === stockId)) return alert("Already owned!");
-    if (roster.length >= 5) return alert("Roster full!");
+    if (roster.length >= 30) return alert("Roster full! Max 30 stocks."); 
     
     const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'league_players', `${activeMembership.leagueId}_${user.uid}`);
     await updateDoc(docRef, { roster: [...roster, { id: stockId, shares: 0 }] });
@@ -470,19 +511,9 @@ export default function FiveStarApp() {
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), { startingPrices: newStartingPrices });
   };
 
-  const toggleAllowedStock = async (stockId) => {
-    if (!activeLeague || !activeMembership?.isAdmin) return;
-    const currentActive = activeLeague.activeStockIds || [];
-    let newActive = currentActive.includes(stockId) 
-      ? currentActive.filter((id) => id !== stockId)
-      : [...currentActive, stockId];
-    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), { activeStockIds: newActive });
-  };
-
   // --- Calculations ---
 
   const calculateReturn = (roster, cash, basePrices, manualStartValue) => {
-      // Calculate Current Value
       let currentValue = parseFloat(cash) || 0;
       
       if (roster && Array.isArray(roster)) {
@@ -493,13 +524,10 @@ export default function FiveStarApp() {
           });
       }
 
-      // Determine Start Value
       let startValue = 0;
-      
       if (manualStartValue !== undefined && manualStartValue !== null && manualStartValue !== "") {
           startValue = parseFloat(manualStartValue);
       } else {
-          // Fallback to calculated if manual not set
           startValue = parseFloat(cash) || 0;
           if (roster && Array.isArray(roster)) {
               roster.forEach(item => {
@@ -642,8 +670,6 @@ export default function FiveStarApp() {
     </div>
   );
 
-  // --- 6. Sub-Renderers ---
-
   const renderLeagueHub = () => {
       return (
           <div className="space-y-6">
@@ -673,7 +699,11 @@ export default function FiveStarApp() {
                             <span className="text-xs text-slate-500">{leaguePlayers.length} Players</span>
                         </div>
                         <div className="divide-y divide-slate-700">
-                            {[...leaguePlayers].filter(p => p.isPlayer).sort((a,b) => b.wins - a.wins || b.points - a.points).map((p, idx) => (
+                            {[...leaguePlayers].filter(p => p.isPlayer).sort((a,b) => b.wins - a.wins || b.points - a.points).map((p, idx) => {
+                                // Calculate live return for display on League Hub
+                                const currentReturn = calculateReturn(p.roster, p.cash, activeLeague?.startingPrices || {}, p.startValue);
+                                
+                                return (
                                 <div key={p.userId} className="p-4 flex items-center justify-between">
                                     <div className="flex items-center gap-3">
                                         <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center font-bold text-slate-300">{idx+1}</div>
@@ -683,9 +713,12 @@ export default function FiveStarApp() {
                                             <div className="text-xs text-slate-500">{p.wins || 0}W - {p.losses || 0}L</div>
                                         </div>
                                     </div>
-                                    <div className="text-emerald-400 font-mono font-bold">{(p.points || 0).toFixed(1)} Pts</div>
+                                    <div className={`font-mono font-bold ${currentReturn >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                        {currentReturn > 0 ? '+' : ''}{currentReturn.toFixed(2)}%
+                                    </div>
                                 </div>
-                            ))}
+                                );
+                            })}
                         </div>
                     </div>
                   </>
@@ -729,13 +762,10 @@ export default function FiveStarApp() {
               const price = live?.c || 0;
               const base = activeLeague?.startingPrices?.[stock.id] || live?.monthOpen || price;
               const change = price && base ? ((price - base) / base) * 100 : 0;
-              const isAllowed = activeLeague?.activeStockIds?.includes(stock.id);
               const inRoster = activeMembership?.roster?.find((i) => i.id === stock.id);
 
-              if (!activeMembership?.isAdmin && !isAllowed) return null;
-
               return (
-                  <Card key={stock.id} className={`p-4 ${activeMembership?.isAdmin && !isAllowed ? 'opacity-50' : ''}`}>
+                  <Card key={stock.id} className="p-4">
                       <div className="flex justify-between items-start">
                           <div>
                               <div className="font-bold text-white">{stock.id}</div>
@@ -752,14 +782,10 @@ export default function FiveStarApp() {
                       </div>
                       <div className="mt-3 pt-3 border-t border-slate-700/50 flex justify-between items-center">
                           <span className="text-[10px] uppercase text-slate-500 font-bold">{stock.sector}</span>
-                          {activeMembership?.isPlayer && activeLeague?.status?.includes('ready') && isAllowed && (
+                          {/* Allowed during ready OR active states. No "banned" check. */}
+                          {activeMembership?.isPlayer && ['ready', 'active'].includes(activeLeague?.status) && (
                               inRoster ? <span className="text-emerald-500 text-xs font-bold flex items-center gap-1"><CheckCircle2 size={12}/> Owned</span> 
                               : <button onClick={() => addToTeam(stock.id)} className="bg-emerald-600 text-white px-3 py-1 rounded text-xs font-bold">Add</button>
-                          )}
-                          {activeMembership?.isAdmin && (
-                            <button onClick={() => toggleAllowedStock(stock.id)} className={`text-[10px] px-2 py-1 rounded font-bold ${isAllowed ? 'bg-red-500/20 text-red-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
-                                {isAllowed ? 'Ban Stock' : 'Allow Stock'}
-                            </button>
                           )}
                       </div>
                   </Card>
@@ -839,57 +865,21 @@ export default function FiveStarApp() {
   const renderMatchups = () => {
       // Detail View
       if (selectedMatchup) {
-        const p1 = leaguePlayers.find(p => p.userId === selectedMatchup.p1);
-        const p2 = leaguePlayers.find(p => p.userId === selectedMatchup.p2);
-        const basePrices = activeLeague.startingPrices || {};
-
-        const renderPlayerStocks = (player) => {
-            if (!player) return <div className="text-slate-500 italic text-xs text-center py-2">No Data</div>;
-            return (
-                <div className="space-y-2">
-                    {(player.roster || []).map(item => {
-                        const currentPrice = liveMarketData[item.id]?.c || 0;
-                        const basePrice = basePrices[item.id] || 1;
-                        const percentChange = ((currentPrice - basePrice) / basePrice) * 100;
-                        
-                        return (
-                            <div key={item.id} className="flex justify-between items-center text-xs bg-slate-900/50 p-2 rounded border border-slate-700/50">
-                                <div>
-                                    <div className="font-bold text-slate-300">{item.id} <span className="text-slate-500">x{item.shares}</span></div>
-                                    <div className="text-[10px] text-slate-500">${basePrice.toFixed(2)} &rarr; ${currentPrice.toFixed(2)}</div>
-                                </div>
-                                <div className={`font-mono font-bold ${percentChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                    {percentChange > 0 ? '+' : ''}{percentChange.toFixed(2)}%
-                                </div>
-                            </div>
-                        )
-                    })}
-                    <div className="flex justify-between items-center text-xs bg-slate-900/30 p-2 rounded mt-2">
-                        <span className="text-slate-500">Cash</span>
-                        <span className="font-mono text-slate-300">${(player.cash || 0).toLocaleString()}</span>
-                    </div>
-                </div>
-            );
-        };
-
         return (
             <div className="space-y-4">
                 <button onClick={() => setSelectedMatchup(null)} className="flex items-center gap-2 text-slate-400 hover:text-white mb-4 transition-colors">
                     <ChevronLeft size={20} /> Back to Matchups
                 </button>
                 <Card className="p-6">
-                    {/* Header */}
                     <div className="text-center mb-6">
                         <div className="text-xs font-bold text-slate-500 uppercase mb-1">Matchup Detail</div>
                         <h2 className="text-2xl font-bold text-white">{selectedMatchup.type || 'Regular Season'}</h2>
                         <div className="text-slate-500 text-sm">Month {activeLeague?.month}</div>
                     </div>
                     
-                    {/* Scoreboard */}
                     <div className="flex justify-between items-center mb-8 relative">
                          <div className="absolute left-1/2 top-0 bottom-0 w-px bg-slate-700/50 -translate-x-1/2"></div>
                         
-                        {/* Player 1 Score */}
                         <div className="text-center w-5/12 z-10">
                             <Avatar name={selectedMatchup.p1Name} size="lg" className="mx-auto mb-3" />
                             <div className="text-xl font-bold text-white mb-1">{selectedMatchup.p1Name}</div>
@@ -902,7 +892,6 @@ export default function FiveStarApp() {
                             <div className="bg-slate-900 rounded-full w-10 h-10 flex items-center justify-center mx-auto border-2 border-slate-700 text-slate-400 font-bold text-xs">VS</div>
                         </div>
 
-                        {/* Player 2 Score */}
                         <div className="text-center w-5/12 z-10">
                             <Avatar name={selectedMatchup.p2Name} size="lg" className="mx-auto mb-3" />
                             <div className="text-xl font-bold text-white mb-1">{selectedMatchup.p2Name}</div>
@@ -913,18 +902,6 @@ export default function FiveStarApp() {
                             ) : (
                                 <div className="text-slate-500 font-mono italic">--</div>
                             )}
-                        </div>
-                    </div>
-
-                    {/* Stock Breakdown */}
-                    <div className="grid grid-cols-2 gap-4 border-t border-slate-700/50 pt-6">
-                        <div>
-                            <h4 className="text-xs font-bold text-slate-500 uppercase mb-3 text-center">{p1 ? p1.name : selectedMatchup.p1Name}'s Portfolio</h4>
-                            {p1 ? renderPlayerStocks(p1) : <div className="text-center text-slate-500 text-xs">Loading data...</div>}
-                        </div>
-                        <div>
-                            <h4 className="text-xs font-bold text-slate-500 uppercase mb-3 text-center">{selectedMatchup.p2 === 'BYE' ? 'BYE WEEK' : (p2 ? p2.name : selectedMatchup.p2Name) + "'s Portfolio"}</h4>
-                            {selectedMatchup.p2 !== 'BYE' && (p2 ? renderPlayerStocks(p2) : <div className="text-center text-slate-500 text-xs">Loading data...</div>)}
                         </div>
                     </div>
                 </Card>
@@ -939,7 +916,6 @@ export default function FiveStarApp() {
             {!activeLeague?.matchups?.length && <div className="text-slate-500">No matchups generated yet.</div>}
             
             {activeLeague?.matchups?.map((m, i) => {
-                // Real-time Calculation for Display
                 let p1LiveScore = m.p1Score;
                 let p2LiveScore = m.p2Score;
 
@@ -1008,6 +984,70 @@ export default function FiveStarApp() {
               <p className="text-xs text-slate-500 mt-2">Enter the total portfolio value for each player at the beginning of the month. This is used to calculate the % return.</p>
           </div>
 
+          <div className="bg-slate-800 border-t-4 border-orange-500 rounded-xl p-4">
+              <h3 className="font-bold text-white mb-4 flex items-center gap-2"><Trophy size={18}/> Edit Player Records</h3>
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                  {leaguePlayers.filter(p => p.isPlayer).map(p => (
+                      <div key={p.id} className="flex items-center justify-between bg-slate-900 p-2 rounded">
+                          <div className="text-sm font-bold text-white w-1/3 truncate">{p.name}</div>
+                          <div className="flex items-center gap-2">
+                              <div className="flex flex-col items-center">
+                                  <span className="text-[8px] text-slate-500 uppercase">Wins</span>
+                                  <input
+                                      type="number"
+                                      defaultValue={p.wins}
+                                      onBlur={(e) => handleUpdatePlayerStats(p.id, 'wins', e.target.value)}
+                                      className="w-12 bg-slate-800 border border-slate-700 text-white px-1 rounded text-center text-xs"
+                                  />
+                              </div>
+                              <div className="flex flex-col items-center">
+                                  <span className="text-[8px] text-slate-500 uppercase">Losses</span>
+                                  <input
+                                      type="number"
+                                      defaultValue={p.losses}
+                                      onBlur={(e) => handleUpdatePlayerStats(p.id, 'losses', e.target.value)}
+                                      className="w-12 bg-slate-800 border border-slate-700 text-white px-1 rounded text-center text-xs"
+                                  />
+                              </div>
+                          </div>
+                      </div>
+                  ))}
+              </div>
+          </div>
+
+          <div className="bg-slate-800 border-t-4 border-pink-500 rounded-xl p-4">
+            <h3 className="font-bold text-white mb-4 flex items-center gap-2"><Swords size={18}/> Edit Current Matchups</h3>
+            <div className="space-y-2 mb-4">
+                {activeLeague?.matchups?.map((m, i) => (
+                    <div key={i} className="flex flex-col gap-2 bg-slate-900 p-2 rounded">
+                        <div className="flex items-center gap-2">
+                            <select 
+                                value={m.p1}
+                                onChange={(e) => handleUpdateMatchup(i, 'p1', e.target.value)}
+                                className="bg-slate-800 border border-slate-700 text-white text-xs rounded p-1 flex-1"
+                            >
+                                <option value="BYE">BYE</option>
+                                {leaguePlayers.map(p => <option key={p.userId} value={p.userId}>{p.name}</option>)}
+                            </select>
+                            <span className="text-slate-500 text-xs font-bold">VS</span>
+                            <select 
+                                value={m.p2}
+                                onChange={(e) => handleUpdateMatchup(i, 'p2', e.target.value)}
+                                className="bg-slate-800 border border-slate-700 text-white text-xs rounded p-1 flex-1"
+                            >
+                                <option value="BYE">BYE</option>
+                                {leaguePlayers.map(p => <option key={p.userId} value={p.userId}>{p.name}</option>)}
+                            </select>
+                            <button onClick={() => handleDeleteMatchup(i)} className="text-rose-500 hover:text-rose-400 p-1"><Trash2 size={14}/></button>
+                        </div>
+                    </div>
+                ))}
+            </div>
+            <button onClick={handleAddMatchup} className="w-full bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded flex items-center justify-center gap-2 text-sm font-bold">
+                <Plus size={14}/> Add New Matchup
+            </button>
+          </div>
+
           <div className="bg-slate-800 border-t-4 border-purple-500 rounded-xl p-4">
               <h3 className="font-bold text-white mb-4 flex items-center gap-2"><Calendar size={18}/> Season Schedule</h3>
               <div className="max-h-60 overflow-y-auto space-y-4">
@@ -1040,15 +1080,10 @@ export default function FiveStarApp() {
              </div>
              <div className="max-h-60 overflow-y-auto space-y-1">
                  {masterStocks.map(s => {
-                     const allowed = activeLeague?.activeStockIds?.includes(s.id);
                      return (
                          <div key={s.id} className="flex justify-between items-center bg-slate-900 p-2 rounded">
                              <div className="text-sm font-bold text-white">{s.id}</div>
                              <div className="flex gap-2">
-                                 <button onClick={() => {
-                                     const newActive = allowed ? activeLeague.activeStockIds.filter((x)=>x!==s.id) : [...activeLeague.activeStockIds, s.id];
-                                     updateDoc(doc(db,'artifacts', appId, 'public', 'data', 'leagues',activeMembership.leagueId), { activeStockIds: newActive });
-                                 }} className={`text-[10px] px-2 py-1 rounded font-bold ${allowed ? 'bg-emerald-500/20 text-emerald-400':'bg-slate-700 text-slate-400'}`}>{allowed?'Allowed':'Banned'}</button>
                                  <button onClick={() => deleteStock(s.id)} className="text-slate-600 hover:text-rose-500"><Trash2 size={14}/></button>
                              </div>
                          </div>
