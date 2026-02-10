@@ -336,15 +336,23 @@ export default function FiveStarApp() {
 
   const handleCreateProfile = async (e) => {
     e.preventDefault();
-    if (!loginName.trim()) return;
+    if (!loginName.trim() || !user) return;
     setIsProcessing(true);
     try {
-      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', user.uid), { 
+      const userRef = doc(db, 'artifacts', appId, 'public', 'data', 'users', user.uid);
+      await setDoc(userRef, { 
         name: loginName, 
+        email: user.email,
         createdAt: Date.now() 
       });
+      
+      // Explicitly set these to trigger the UI shift immediately
       setHasProfile(true);
-    } catch (err) { alert(err.message); }
+      setLoginName(loginName); 
+    } catch (err) { 
+      console.error(err);
+      alert(err.message); 
+    }
     setIsProcessing(false);
   };
 
