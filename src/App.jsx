@@ -52,6 +52,10 @@ const STATUS_META = {
   completed:  { label: 'Scored',  chip: 'chip-gold' },
 };
 
+// Always returns a usable shape: `activeLeague` is null until its snapshot lands,
+// and leagues created before the season rewrite carry statuses not listed above.
+const statusMeta = (status) => STATUS_META[status] || { label: status || 'Setup', chip: 'chip-muted' };
+
 // Podium colours for the top three; everyone else gets the muted default.
 const RANK_STYLES = [
   'bg-gold-sheen text-ink-950',
@@ -1098,7 +1102,7 @@ export default function FiveStarApp() {
 
   if (!user) return (
     <AuthShell
-      eyebrow="Fantasy Stock League"
+      eyebrow="Five Star Fantasy Investment League"
       title={isSignUp ? 'Join the league' : 'Welcome back'}
       subtitle={isSignUp ? 'Draft tickers, run your book, beat your friends.' : 'Sign in to check your standings.'}
     >
@@ -1354,7 +1358,7 @@ export default function FiveStarApp() {
 
   const renderLeagueHub = () => {
       const standings = [...leaguePlayers].filter(p => p.isPlayer).sort((a,b) => b.wins - a.wins || b.points - a.points);
-      const status = STATUS_META[activeLeague?.status] || STATUS_META.drafting;
+      const status = statusMeta(activeLeague?.status);
 
       return (
       <div className="space-y-5">
@@ -1833,7 +1837,7 @@ export default function FiveStarApp() {
 
   const renderAdmin = () => (
       <div className="space-y-4">
-          <SectionHeading icon={Shield} title="Commissioner" meta={STATUS_META[activeLeague?.status]?.label} />
+          <SectionHeading icon={Shield} title="Commissioner" meta={statusMeta(activeLeague?.status).label} />
 
           <Panel icon={Crown} title="Season controls" accent="gold"
             description={`${monthLabel(activeLeague?.seasonStart)} – ${monthLabel(activeLeague?.seasonEnd)}, playoffs ${monthLabel(activeLeague?.playoffMonth)}. $${Number(activeLeague?.monthlyAllowance || 0).toLocaleString()} deposited per player each month.`}>
@@ -1842,9 +1846,9 @@ export default function FiveStarApp() {
                      <div className="eyebrow">Open month</div>
                      <div className="mt-0.5 text-lg font-extrabold tracking-tightest text-white">{monthLabel(activeLeague?.currentMonth)}</div>
                  </div>
-                 <span className={STATUS_META[activeLeague?.status]?.chip || 'chip-muted'}>
-                     {STATUS_META[activeLeague?.status]?.live && <span className="h-1.5 w-1.5 animate-ticker-pulse rounded-full bg-current" />}
-                     {STATUS_META[activeLeague?.status]?.label || activeLeague?.status}
+                 <span className={statusMeta(activeLeague?.status).chip}>
+                     {statusMeta(activeLeague?.status).live && <span className="h-1.5 w-1.5 animate-ticker-pulse rounded-full bg-current" />}
+                     {statusMeta(activeLeague?.status).label}
                  </span>
              </div>
              <div className="grid gap-2">
