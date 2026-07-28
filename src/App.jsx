@@ -39,14 +39,17 @@ const INITIAL_STOCKS = [
   { id: 'GOOGL', name: 'Alphabet', sector: 'Tech' },
 ];
 
+const FRANCHISE_SLOTS = 4;
+const DEFAULT_ALLOWANCE = 10000;
+const DEFAULT_MAX_PLAYERS = 8;
+
 // --- Display Constants ---
 
 const STATUS_META = {
-  drafting:              { label: 'Drafting',    chip: 'chip-muted' },
-  ready:                 { label: 'Ready',       chip: 'chip bg-sky-400/15 text-sky-300 ring-1 ring-sky-400/30' },
-  ready_to_start_month:  { label: 'Ready',       chip: 'chip bg-sky-400/15 text-sky-300 ring-1 ring-sky-400/30' },
-  active:                { label: 'Live',        chip: 'chip bg-emerald-400/15 text-emerald-300 ring-1 ring-emerald-400/30', live: true },
-  completed:             { label: 'Final',       chip: 'chip-gold' },
+  setup:      { label: 'Setup',   chip: 'chip-muted' },
+  ready:      { label: 'Ready',   chip: 'chip bg-sky-400/15 text-sky-300 ring-1 ring-sky-400/30' },
+  active:     { label: 'Live',    chip: 'chip bg-emerald-400/15 text-emerald-300 ring-1 ring-emerald-400/30', live: true },
+  completed:  { label: 'Scored',  chip: 'chip-gold' },
 };
 
 // Podium colours for the top three; everyone else gets the muted default.
@@ -55,6 +58,49 @@ const RANK_STYLES = [
   'bg-slate-300/90 text-ink-950',
   'bg-amber-700/80 text-amber-100',
 ];
+
+// --- Month Helpers ---
+// Months are stored as sortable 'YYYY-MM' keys so a season can span any range.
+
+const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+const monthKey = (year, month) => `${year}-${String(month).padStart(2, '0')}`;
+
+const parseMonth = (key) => {
+  const [year, month] = String(key || '').split('-').map(Number);
+  return { year, month };
+};
+
+const monthLabel = (key, short = false) => {
+  if (!key) return '—';
+  const { year, month } = parseMonth(key);
+  if (!year || !month) return '—';
+  const name = MONTH_NAMES[month - 1] || '';
+  return `${short ? name.slice(0, 3) : name} ${year}`;
+};
+
+const addMonths = (key, count) => {
+  const { year, month } = parseMonth(key);
+  const zeroBased = (year * 12) + (month - 1) + count;
+  return monthKey(Math.floor(zeroBased / 12), (zeroBased % 12) + 1);
+};
+
+// Inclusive list of every month from start to end.
+const monthRange = (start, end) => {
+  if (!start || !end || start > end) return [];
+  const months = [];
+  let cursor = start;
+  while (cursor <= end && months.length < 120) {
+    months.push(cursor);
+    cursor = addMonths(cursor, 1);
+  }
+  return months;
+};
+
+const currentMonthKey = () => {
+  const now = new Date();
+  return monthKey(now.getFullYear(), now.getMonth() + 1);
+};
 
 // --- Helper Functions ---
 
@@ -161,6 +207,41 @@ const AuthShell = ({ eyebrow, title, subtitle, children }) => (
   </div>
 );
 
+const MonthPicker = ({ value, onChange }) => {
+  const { year, month } = parseMonth(value);
+  const thisYear = new Date().getFullYear();
+  const years = [thisYear - 1, thisYear, thisYear + 1, thisYear + 2];
+  return (
+    <div className="flex gap-2">
+      <select value={month || ''} onChange={(e) => onChange(monthKey(year || thisYear, Number(e.target.value)))} className="field-sm flex-1 py-2.5">
+        {MONTH_NAMES.map((name, i) => <option key={name} value={i + 1}>{name}</option>)}
+      </select>
+      <select value={year || ''} onChange={(e) => onChange(monthKey(Number(e.target.value), month || 1))} className="field-sm w-28 py-2.5">
+        {years.map(y => <option key={y} value={y}>{y}</option>)}
+      </select>
+    </div>
+  );
+};
+
+const WizardSteps = ({ steps, current }) => (
+  <div className="mb-6 flex items-center gap-2">
+    {steps.map((label, i) => (
+      <React.Fragment key={label}>
+        <div className="flex items-center gap-2">
+          <div className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold transition ${
+            i < current ? 'bg-gold-400/20 text-gold-300 ring-1 ring-gold-400/40'
+            : i === current ? 'bg-gold-sheen text-ink-950'
+            : 'bg-white/[0.06] text-slate-600'}`}>
+            {i < current ? <CheckCircle2 size={13}/> : i + 1}
+          </div>
+          <span className={`text-[11px] font-bold ${i === current ? 'text-white' : 'text-slate-600'}`}>{label}</span>
+        </div>
+        {i < steps.length - 1 && <div className="h-px flex-1 hairline" />}
+      </React.Fragment>
+    ))}
+  </div>
+);
+
 const Panel = ({ icon: Icon, title, accent = 'gold', description, children }) => (
   <section className="surface relative overflow-hidden p-5 pl-6">
     <div className={`absolute inset-y-0 left-0 w-1 bg-gradient-to-b ${PANEL_ACCENTS[accent]}`} />
@@ -218,13 +299,31 @@ export default function FiveStarApp() {
   const [editingAvatar, setEditingAvatar] = useState('');
   
   const [joinLeagueId, setJoinLeagueId] = useState('');
-  const [createLeagueName, setCreateLeagueName] = useState('');
-  const [adminPlays, setAdminPlays] = useState(true);
+
+  // League Creation Wizard
+  const [onboardingMode, setOnboardingMode] = useState(null); // null | 'join' | 'create'
+  const [setupStep, setSetupStep] = useState(0);
+  const [setupDraft, setSetupDraft] = useState(() => {
+    const thisMonth = currentMonthKey();
+    return {
+      name: '',
+      maxPlayers: DEFAULT_MAX_PLAYERS,
+      adminPlays: true,
+      seasonStart: thisMonth,
+      seasonEnd: addMonths(thisMonth, 6),
+      monthlyAllowance: DEFAULT_ALLOWANCE,
+      pool: [],
+    };
+  });
+  const [poolSearch, setPoolSearch] = useState('');
+  const [isSearchingPool, setIsSearchingPool] = useState(false);
 
   // Admin States
   const [newStockTicker, setNewStockTicker] = useState('');
   const [stockSearch, setStockSearch] = useState('');
   const [newLeagueNameSetting, setNewLeagueNameSetting] = useState('');
+  const [backfillMonth, setBackfillMonth] = useState(null);
+  const [backfillScores, setBackfillScores] = useState({});
 
   // Real Data
   const [liveMarketData, setLiveMarketData] = useState(() => {
@@ -353,13 +452,19 @@ export default function FiveStarApp() {
 
   // --- 3. Real-time Data ---
 
+  // Price only what this league can actually trade — the global catalogue grows
+  // with every league and Finnhub is rate limited.
+  const trackedTickers = activeLeague?.stockPool?.length
+    ? activeLeague.stockPool
+    : masterStocks.map(s => s.id);
+
   const fetchStockData = async () => {
-    if (masterStocks.length === 0) return;
+    if (trackedTickers.length === 0) return;
     if (FINNHUB_API_KEY === "YOUR_FINNHUB_KEY") {
        const newData = {};
-       masterStocks.forEach(s => {
+       trackedTickers.forEach(id => {
          const current = 150 + Math.random()*10;
-         newData[s.id] = { c: current, monthOpen: 145 };
+         newData[id] = { c: current, monthOpen: 145 };
        });
        setLiveMarketData(newData);
        return;
@@ -372,26 +477,26 @@ export default function FiveStarApp() {
     const toTime = Math.floor(now.getTime() / 1000);
 
     let hasUpdates = false;
-    for (const stock of masterStocks) {
+    for (const ticker of trackedTickers) {
       try {
         await sleep(200);
-        const quoteRes = await fetch(`https://finnhub.io/api/v1/quote?symbol=${stock.id}&token=${FINNHUB_API_KEY}`);
+        const quoteRes = await fetch(`https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${FINNHUB_API_KEY}`);
         const quoteData = await quoteRes.json();
-        
+
         if (!quoteData.c && quoteData.c !== 0) continue;
 
-        let monthOpen = newData[stock.id]?.monthOpen;
+        let monthOpen = newData[ticker]?.monthOpen;
         if (!monthOpen || monthOpen === 0) {
             await sleep(200);
-            const candleRes = await fetch(`https://finnhub.io/api/v1/stock/candle?symbol=${stock.id}&resolution=D&from=${fromTime}&to=${toTime}&token=${FINNHUB_API_KEY}`);
+            const candleRes = await fetch(`https://finnhub.io/api/v1/stock/candle?symbol=${ticker}&resolution=D&from=${fromTime}&to=${toTime}&token=${FINNHUB_API_KEY}`);
             const candleData = await candleRes.json();
             if (candleData.s === "ok" && candleData.o?.length > 0) monthOpen = candleData.o[0];
             else monthOpen = quoteData.pc || quoteData.c;
         }
 
-        newData[stock.id] = { c: quoteData.c, monthOpen };
+        newData[ticker] = { c: quoteData.c, monthOpen };
         hasUpdates = true;
-      } catch (err) { console.error(`Error fetching ${stock.id}:`, err); }
+      } catch (err) { console.error(`Error fetching ${ticker}:`, err); }
     }
     if (hasUpdates) setLiveMarketData(newData);
   };
@@ -401,7 +506,7 @@ export default function FiveStarApp() {
     fetchStockData();
     const interval = setInterval(fetchStockData, 60000);
     return () => clearInterval(interval);
-  }, [user, masterStocks.length]);
+  }, [user, trackedTickers.length, activeLeague?.id]);
 
   // --- 4. User Actions ---
 
@@ -427,49 +532,117 @@ export default function FiveStarApp() {
   };
 
   const handleCreateLeague = async (e) => {
-      e.preventDefault();
+      e?.preventDefault();
+      const draft = setupDraft;
+      if (!draft.name.trim()) return alert("Give the league a name.");
+      if (draft.seasonEnd < draft.seasonStart) return alert("The season must end after it starts.");
+      if (draft.pool.length === 0) return alert("Add at least one stock to the pool.");
+
       setIsProcessing(true);
       const newLeagueId = Math.floor(100000 + Math.random() * 900000).toString();
+      const playoffMonth = addMonths(draft.seasonEnd, 1);
       try {
           await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', newLeagueId), {
-              id: newLeagueId, name: createLeagueName, adminUid: user.uid,
-              month: 4, activeStockIds: [], 
-              status: 'drafting', schedule: {}, matchups: [], startingPrices: {}, initialPrices: {}, createdAt: Date.now()
+              id: newLeagueId,
+              name: draft.name.trim(),
+              adminUid: user.uid,
+              maxPlayers: Number(draft.maxPlayers) || DEFAULT_MAX_PLAYERS,
+              seasonStart: draft.seasonStart,
+              seasonEnd: draft.seasonEnd,
+              playoffMonth,
+              currentMonth: draft.seasonStart,
+              monthlyAllowance: Number(draft.monthlyAllowance) || DEFAULT_ALLOWANCE,
+              stockPool: draft.pool,
+              status: 'setup',
+              schedule: {},
+              matchups: [],
+              startingPrices: {},
+              initialPrices: {},
+              createdAt: Date.now(),
           });
           const playerDocId = `${newLeagueId}_${user.uid}`;
           const membershipData = {
-              userId: user.uid, leagueId: newLeagueId, leagueName: createLeagueName, 
+              userId: user.uid, leagueId: newLeagueId, leagueName: draft.name.trim(),
               name: loginName || user.email?.split('@')[0] || 'Player',
-              isAdmin: true, isPlayer: adminPlays, roster: [], cash: 0,
-              wins: 0, losses: 0, points: 0, avatar: ''
+              isAdmin: true, isPlayer: draft.adminPlays, roster: [], cash: 0,
+              franchiseStocks: [], wins: 0, losses: 0, points: 0, avatar: ''
           };
           await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'league_players', playerDocId), membershipData);
           setActiveMembership(membershipData);
-          setShowLeagueCreator(false);
+          closeOnboarding();
+          setCurrentView('admin');
       } catch (err) { alert(err.message); }
       setIsProcessing(false);
   };
 
   const handleJoinLeague = async (e) => {
-      e.preventDefault();
+      e?.preventDefault();
       setIsProcessing(true);
       try {
-          const leagueDoc = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', joinLeagueId));
-          if (!leagueDoc.exists()) throw new Error("League not found");
+          const leagueDoc = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', joinLeagueId.trim()));
+          if (!leagueDoc.exists()) throw new Error("No league found with that code.");
           const leagueData = leagueDoc.data();
-          const playerDocId = `${joinLeagueId}_${user.uid}`;
+
+          const playersQ = query(
+              collection(db, 'artifacts', appId, 'public', 'data', 'league_players'),
+              where('leagueId', '==', joinLeagueId.trim())
+          );
+          const existing = await getDocs(playersQ);
+          const alreadyIn = existing.docs.some(d => d.data().userId === user.uid);
+          const seatsTaken = existing.docs.filter(d => d.data().isPlayer).length;
+          if (!alreadyIn && leagueData.maxPlayers && seatsTaken >= leagueData.maxPlayers) {
+              throw new Error(`${leagueData.name} is full (${leagueData.maxPlayers} players).`);
+          }
+
+          const playerDocId = `${joinLeagueId.trim()}_${user.uid}`;
           const membershipData = {
-              userId: user.uid, leagueId: joinLeagueId, leagueName: leagueData.name, 
+              userId: user.uid, leagueId: joinLeagueId.trim(), leagueName: leagueData.name,
               name: loginName || user.email?.split('@')[0] || 'Player',
               isAdmin: false, isPlayer: true, roster: [], cash: 0,
-              wins: 0, losses: 0, points: 0, avatar: ''
+              franchiseStocks: [], wins: 0, losses: 0, points: 0, avatar: ''
           };
           await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'league_players', playerDocId), membershipData);
           setActiveMembership(membershipData);
           setJoinLeagueId('');
-          setShowLeagueCreator(false);
+          closeOnboarding();
       } catch (err) { alert(err.message); }
       setIsProcessing(false);
+  };
+
+  const closeOnboarding = () => {
+      setShowLeagueCreator(false);
+      setOnboardingMode(null);
+      setSetupStep(0);
+      setPoolSearch('');
+  };
+
+  // Look a ticker up on Finnhub so the pool stores a real company name.
+  const searchTicker = async (raw) => {
+      const ticker = raw.trim().toUpperCase();
+      if (!ticker) return null;
+      let name = ticker;
+      try {
+          const res = await fetch(`https://finnhub.io/api/v1/search?q=${ticker}&token=${FINNHUB_API_KEY}`);
+          const data = await res.json();
+          const exact = data.result?.find(r => r.symbol === ticker) || data.result?.[0];
+          if (exact) name = exact.description || ticker;
+      } catch (err) { console.error("Ticker lookup failed", err); }
+      return { id: ticker, name, sector: 'Unknown' };
+  };
+
+  const addTickerToDraft = async () => {
+      const ticker = poolSearch.trim().toUpperCase();
+      if (!ticker) return;
+      if (setupDraft.pool.includes(ticker)) { setPoolSearch(''); return; }
+      setIsSearchingPool(true);
+      const stock = await searchTicker(ticker);
+      if (stock) {
+          // Keep the global catalogue in sync so every league can reuse the lookup.
+          await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'stocks', stock.id), stock);
+          setSetupDraft(d => ({ ...d, pool: [...d.pool, stock.id] }));
+      }
+      setPoolSearch('');
+      setIsSearchingPool(false);
   };
 
   const handleFileChange = (e) => {
@@ -530,6 +703,15 @@ export default function FiveStarApp() {
 
   // --- ADMIN: MATCHUP & STATS EDITING ---
 
+  // The open month lives in two places — the live `matchups` array and its slot in
+  // `schedule` — so every edit has to write both or the results editor goes stale.
+  const saveCurrentMatchups = async (newMatchups) => {
+    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), {
+        matchups: newMatchups,
+        schedule: { ...(activeLeague.schedule || {}), [activeLeague.currentMonth]: newMatchups },
+    });
+  };
+
   const handleUpdateMatchup = async (index, field, value) => {
     if (!activeLeague || !activeMembership?.isAdmin) return;
     const newMatchups = [...(activeLeague.matchups || [])];
@@ -542,7 +724,7 @@ export default function FiveStarApp() {
          const scoreField = field === 'p1' ? 'p1Score' : 'p2Score';
          if (value === 'BYE') newMatchups[index][scoreField] = 0;
     }
-    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), { matchups: newMatchups });
+    await saveCurrentMatchups(newMatchups);
   };
 
   const handleAddMatchup = async () => {
@@ -554,7 +736,7 @@ export default function FiveStarApp() {
         p1Score: 0, p2Score: 0,
         type: 'Custom Matchup'
     });
-    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), { matchups: newMatchups });
+    await saveCurrentMatchups(newMatchups);
   };
 
   const handleDeleteMatchup = async (index) => {
@@ -562,7 +744,7 @@ export default function FiveStarApp() {
     if (!confirm("Delete this matchup?")) return;
     const newMatchups = [...(activeLeague.matchups || [])];
     newMatchups.splice(index, 1);
-    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), { matchups: newMatchups });
+    await saveCurrentMatchups(newMatchups);
   };
 
   const handleUpdatePlayerStats = async (playerId, field, value) => {
@@ -573,37 +755,13 @@ export default function FiveStarApp() {
 
   // --- 5. Game Logic ---
 
-  const addNewStock = async (e) => {
-    e.preventDefault();
-    if (!newStockTicker) return;
-    setIsProcessing(true);
-    let stockName = newStockTicker;
-    try {
-        const res = await fetch(`https://finnhub.io/api/v1/search?q=${newStockTicker}&token=${FINNHUB_API_KEY}`);
-        const data = await res.json();
-        if (data.result && data.result.length > 0) {
-            stockName = data.result[0].description;
-        }
-    } catch (err) { console.error("Could not fetch name", err); }
-    const ticker = newStockTicker.toUpperCase();
-    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'stocks', ticker), { id: ticker, name: stockName, sector: 'Unknown' });
-    setNewStockTicker('');
-    setIsProcessing(false);
-    alert(`Added ${ticker}: ${stockName}`);
-  };
-
-  const deleteStock = async (stockId) => {
-      if (!activeMembership?.isAdmin) return;
-      if (confirm(`Delete ${stockId} from the master pool?`)) {
-          await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'stocks', stockId));
-      }
-  };
-
   const addToTeam = async (stockId) => {
     if (!activeMembership?.isPlayer) return;
     const roster = activeMembership.roster || [];
     if (roster.find((i) => i.id === stockId)) return alert("Already owned!");
-    if (roster.length >= 30) return alert("Roster full! Max 30 stocks."); 
+    if (roster.length >= 30) return alert("Roster full! Max 30 stocks.");
+    const owner = franchiseOwners[stockId];
+    if (owner && owner.userId !== user.uid) return alert(`${stockId} is ${owner.name}'s franchise stock.`);
     const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'league_players', `${activeMembership.leagueId}_${user.uid}`);
     await updateDoc(docRef, { roster: [...roster, { id: stockId, shares: 0 }] });
   };
@@ -673,11 +831,14 @@ export default function FiveStarApp() {
 
   // --- Schedule & Sim ---
 
+  const seasonMonths = monthRange(activeLeague?.seasonStart, activeLeague?.seasonEnd);
+  const allMonths = activeLeague?.playoffMonth ? [...seasonMonths, activeLeague.playoffMonth] : seasonMonths;
+  const isPlayoffMonth = activeLeague?.currentMonth && activeLeague.currentMonth === activeLeague.playoffMonth;
+
   const generateSeasonSchedule = () => {
       const playingMembers = leaguePlayers.filter(p => p.isPlayer);
       const schedule = {};
-      const regularMonths = [4, 5, 6, 7, 8, 9, 10, 11];
-      regularMonths.forEach(month => {
+      monthRange(activeLeague.seasonStart, activeLeague.seasonEnd).forEach(month => {
           const shuffled = [...playingMembers].sort(() => 0.5 - Math.random());
           const pairs = [];
           for(let i=0; i<shuffled.length; i+=2) {
@@ -703,71 +864,220 @@ export default function FiveStarApp() {
   };
 
   const startLeague = async () => {
+      if (leaguePlayers.filter(p => p.isPlayer).length < 2) return alert("You need at least 2 players before generating a schedule.");
       const sched = generateSeasonSchedule();
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), { status: 'ready', schedule: sched, month: 4, matchups: sched[4] });
+      const first = activeLeague.seasonStart;
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), {
+          status: 'ready', schedule: sched, currentMonth: first, matchups: sched[first] || []
+      });
   };
 
+  // Every player's standings are derived from the recorded schedule rather than
+  // incremented in place, so backfilled or corrected months always add up.
+  const recomputeStandings = async (schedule) => {
+      const totals = {};
+      leaguePlayers.filter(p => p.isPlayer).forEach(p => { totals[p.userId] = { wins: 0, losses: 0, points: 0 }; });
+
+      Object.values(schedule || {}).forEach(monthMatchups => {
+          (monthMatchups || []).forEach(m => {
+              if (!m.scored) return;
+              const p1 = totals[m.p1];
+              const p2 = m.p2 === 'BYE' ? null : totals[m.p2];
+              if (p1) {
+                  p1.points += Number(m.p1Score) || 0;
+                  if (m.p2 === 'BYE') p1.wins += 1;
+                  else if (m.p1Score > m.p2Score) p1.wins += 1;
+                  else if (m.p1Score < m.p2Score) p1.losses += 1;
+              }
+              if (p2) {
+                  p2.points += Number(m.p2Score) || 0;
+                  if (m.p2Score > m.p1Score) p2.wins += 1;
+                  else if (m.p2Score < m.p1Score) p2.losses += 1;
+              }
+          });
+      });
+
+      const batch = writeBatch(db);
+      leaguePlayers.filter(p => p.isPlayer).forEach(p => {
+          const t = totals[p.userId] || { wins: 0, losses: 0, points: 0 };
+          batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'league_players', p.id), {
+              wins: t.wins, losses: t.losses, points: parseFloat(t.points.toFixed(2))
+          });
+      });
+      await batch.commit();
+  };
+
+  // Opens a month: deposits everyone's allowance, then snapshots the value they
+  // have to beat. Positions carry over from the previous month.
   const startMonth = async () => {
       await fetchStockData();
+      const allowance = Number(activeLeague.monthlyAllowance) || 0;
+      const pool = activeLeague.stockPool || [];
       const starts = {};
-      masterStocks.forEach(s => starts[s.id] = liveMarketData[s.id]?.c || 0);
-      
-      const updateData = { status: 'active', startingPrices: starts };
-      
-      // NEW: Save Initial Prices if they don't exist (Game Start tracking)
+      pool.forEach(id => { starts[id] = liveMarketData[id]?.c || 0; });
+
+      const leagueUpdate = { status: 'active', startingPrices: starts };
       if (!activeLeague.initialPrices || Object.keys(activeLeague.initialPrices).length === 0) {
-          updateData.initialPrices = starts;
+          leagueUpdate.initialPrices = starts;
       }
-      
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), updateData);
+
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), leagueUpdate);
+
+      leaguePlayers.filter(p => p.isPlayer).forEach(p => {
+          const newCash = (parseFloat(p.cash) || 0) + allowance;
+          let holdings = 0;
+          (p.roster || []).forEach(item => {
+              holdings += (parseFloat(item.shares) || 0) * (starts[item.id] || 0);
+          });
+          batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'league_players', p.id), {
+              cash: newCash,
+              startValue: parseFloat((holdings + newCash).toFixed(2)),
+          });
+      });
+      await batch.commit();
   };
 
   const endMonth = async () => {
       await fetchStockData();
       const prices = activeLeague.startingPrices || {};
-      const updates = activeLeague.matchups.map((m) => {
+      const updates = (activeLeague.matchups || []).map((m) => {
           const p1 = leaguePlayers.find(p=>p.userId===m.p1);
           const p2 = leaguePlayers.find(p=>p.userId===m.p2);
           return {
-              ...m, 
+              ...m,
+              scored: true,
               p1Score: parseFloat(calculateReturn(p1?.roster, p1?.cash, prices, p1?.startValue).toFixed(2)),
               p2Score: m.p2 === 'BYE' ? 0 : parseFloat(calculateReturn(p2?.roster, p2?.cash, prices, p2?.startValue).toFixed(2))
           }
       });
-      const batch = writeBatch(db);
-      const newSchedule = { ...activeLeague.schedule, [activeLeague.month]: updates };
-      batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), { status: 'completed', matchups: updates, schedule: newSchedule });
-      updates.forEach((m) => {
-          const p1Doc = leaguePlayers.find(p=>p.userId===m.p1);
-          if (p1Doc) batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'league_players', p1Doc.id), {
-              wins: p1Doc.wins + (m.p1Score > m.p2Score ? 1 : 0),
-              losses: p1Doc.losses + (m.p1Score < m.p2Score ? 1 : 0),
-              points: p1Doc.points + m.p1Score
-          });
-          if (m.p2 !== 'BYE') {
-              const p2Doc = leaguePlayers.find(p=>p.userId===m.p2);
-              if (p2Doc) batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'league_players', p2Doc.id), {
-                  wins: p2Doc.wins + (m.p2Score > m.p1Score ? 1 : 0),
-                  losses: p2Doc.losses + (m.p2Score < m.p1Score ? 1 : 0),
-                  points: p2Doc.points + m.p2Score
-              });
-          }
+      const newSchedule = { ...activeLeague.schedule, [activeLeague.currentMonth]: updates };
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), {
+          status: 'completed', matchups: updates, schedule: newSchedule
       });
-      await batch.commit();
+      await recomputeStandings(newSchedule);
   };
 
   const nextMonth = async () => {
-      const nm = (activeLeague.month || 4) + 1;
-      if (nm > 12) return alert("Season Completed!");
-      let nextMatchups = nm === 12 ? generatePlayoffs() : activeLeague.schedule?.[nm] || [];
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), { month: nm, status: 'ready', matchups: nextMatchups, startingPrices: {} });
+      const nm = addMonths(activeLeague.currentMonth, 1);
+      if (activeLeague.playoffMonth && nm > activeLeague.playoffMonth) return alert("Season complete — that was the final month.");
+      const nextMatchups = nm === activeLeague.playoffMonth ? generatePlayoffs() : (activeLeague.schedule?.[nm] || []);
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), {
+          currentMonth: nm, status: 'ready', matchups: nextMatchups, startingPrices: {}
+      });
   };
-  
+
+  // Skip the pointer to any month — used when a league starts partway through a
+  // real-life season and the earlier months are being backfilled.
+  const jumpToMonth = async (month) => {
+      if (!activeMembership?.isAdmin || !month) return;
+      const matchups = month === activeLeague.playoffMonth
+          ? (activeLeague.schedule?.[month] || generatePlayoffs())
+          : (activeLeague.schedule?.[month] || []);
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), {
+          currentMonth: month, status: 'ready', matchups, startingPrices: {}
+      });
+  };
+
   const resetToDraft = async () => {
     if (!activeMembership?.isAdmin) return;
-    if (confirm("Reset current month? This will cancel current matchups and progress.")) {
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), { status: 'ready_to_start_month' });
+    if (confirm("Reset this month? Matchups stay, but the month reopens and scores are cleared.")) {
+      const cleared = (activeLeague.matchups || []).map(m => ({ ...m, scored: false, p1Score: 0, p2Score: 0 }));
+      const newSchedule = { ...activeLeague.schedule, [activeLeague.currentMonth]: cleared };
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), {
+        status: 'ready', matchups: cleared, schedule: newSchedule, startingPrices: {}
+      });
+      await recomputeStandings(newSchedule);
     }
+  };
+
+  // --- Backfill: record a past month's real results by hand ---
+
+  const openBackfill = (month) => {
+      const existing = activeLeague?.schedule?.[month] || [];
+      const scores = {};
+      existing.forEach((m, i) => {
+          scores[`${i}_p1`] = m.p1Score ?? '';
+          scores[`${i}_p2`] = m.p2Score ?? '';
+      });
+      setBackfillScores(scores);
+      setBackfillMonth(month);
+  };
+
+  const saveBackfill = async () => {
+      if (!activeMembership?.isAdmin || !backfillMonth) return;
+      setIsProcessing(true);
+      try {
+          const monthMatchups = (activeLeague.schedule?.[backfillMonth] || []).map((m, i) => {
+              const p1Raw = backfillScores[`${i}_p1`];
+              const p2Raw = backfillScores[`${i}_p2`];
+              return {
+                  ...m,
+                  scored: true,
+                  p1Score: parseFloat(p1Raw) || 0,
+                  p2Score: m.p2 === 'BYE' ? 0 : (parseFloat(p2Raw) || 0),
+              };
+          });
+          const newSchedule = { ...activeLeague.schedule, [backfillMonth]: monthMatchups };
+          const leagueUpdate = { schedule: newSchedule };
+          // Keep the live matchup list in sync if we just edited the open month.
+          if (backfillMonth === activeLeague.currentMonth) leagueUpdate.matchups = monthMatchups;
+          await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), leagueUpdate);
+          await recomputeStandings(newSchedule);
+          setBackfillMonth(null);
+      } catch (err) { alert(err.message); }
+      setIsProcessing(false);
+  };
+
+  // --- Franchise stocks ---
+
+  const franchiseOwners = {};
+  leaguePlayers.forEach(p => {
+      (p.franchiseStocks || []).forEach(id => { franchiseOwners[id] = p; });
+  });
+
+  const toggleFranchiseStock = async (player, stockId) => {
+      if (!activeMembership?.isAdmin) return;
+      const current = player.franchiseStocks || [];
+      const owned = current.includes(stockId);
+      if (!owned) {
+          if (current.length >= FRANCHISE_SLOTS) return alert(`${player.name} already has ${FRANCHISE_SLOTS} franchise stocks.`);
+          const takenBy = franchiseOwners[stockId];
+          if (takenBy && takenBy.userId !== player.userId) return alert(`${stockId} is already ${takenBy.name}'s franchise stock.`);
+      }
+      const next = owned ? current.filter(id => id !== stockId) : [...current, stockId];
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'league_players', player.id), { franchiseStocks: next });
+  };
+
+  // --- League stock pool ---
+
+  const updateStockPool = async (nextPool) => {
+      if (!activeMembership?.isAdmin) return;
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), { stockPool: nextPool });
+  };
+
+  const addTickerToPool = async () => {
+      const ticker = newStockTicker.trim().toUpperCase();
+      if (!ticker) return;
+      const pool = activeLeague?.stockPool || [];
+      if (pool.includes(ticker)) { setNewStockTicker(''); return; }
+      setIsProcessing(true);
+      const stock = await searchTicker(ticker);
+      if (stock) {
+          await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'stocks', stock.id), stock);
+          await updateStockPool([...pool, stock.id]);
+      }
+      setNewStockTicker('');
+      setIsProcessing(false);
+  };
+
+  const removeFromPool = async (stockId) => {
+      const owner = franchiseOwners[stockId];
+      const message = owner
+          ? `${stockId} is ${owner.name}'s franchise stock. Remove it from the pool anyway?`
+          : `Remove ${stockId} from this league's pool?`;
+      if (!confirm(message)) return;
+      await updateStockPool((activeLeague?.stockPool || []).filter(id => id !== stockId));
   };
 
   // --- Views ---
@@ -820,6 +1130,228 @@ export default function FiveStarApp() {
     </AuthShell>
   );
 
+  // The first thing a new signup sees: pick a lane, then either enter a code or
+  // walk the three-step league setup.
+  const renderOnboarding = (inModal = false) => {
+      const draft = setupDraft;
+      const patch = (changes) => setSetupDraft(d => ({ ...d, ...changes }));
+      const playoff = addMonths(draft.seasonEnd, 1);
+      const regularMonths = monthRange(draft.seasonStart, draft.seasonEnd);
+      const stockName = (id) => masterStocks.find(s => s.id === id)?.name || id;
+
+      // A plain function, not a component — an inline component type would remount
+      // on every keystroke and the inputs below would lose focus.
+      const shell = (children) => (
+          <div className={`surface p-6 ${inModal ? 'shadow-lift' : 'animate-fade-up'}`}>
+              {inModal && (
+                  <button onClick={closeOnboarding} aria-label="Close" className="float-right -mr-1 -mt-1 text-slate-500 transition hover:text-white">
+                      <X size={20}/>
+                  </button>
+              )}
+              {children}
+          </div>
+      );
+
+      if (!onboardingMode) return shell(
+          <>
+              <div className="mb-6">
+                  <div className="eyebrow text-gold-400/80">Get started</div>
+                  <h2 className="mt-1 text-2xl font-extrabold tracking-tightest text-white">Join a league</h2>
+                  <p className="mt-1.5 text-sm text-slate-500">Start your own and invite friends, or hop into one with a code.</p>
+              </div>
+              <div className="space-y-3">
+                  <button onClick={() => setOnboardingMode('create')}
+                    className="group flex w-full items-center gap-4 rounded-2xl bg-white/[0.04] p-4 text-left ring-1 ring-white/10 transition hover:bg-white/[0.07] hover:ring-gold-400/40">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gold-sheen text-ink-950"><Crown size={20}/></div>
+                      <div className="min-w-0 flex-1">
+                          <div className="font-bold text-white">Create a league</div>
+                          <div className="text-xs text-slate-500">Set the season, budget and stock pool. You'll be commissioner.</div>
+                      </div>
+                      <ArrowRight size={18} className="shrink-0 text-slate-600 transition group-hover:text-gold-300"/>
+                  </button>
+                  <button onClick={() => setOnboardingMode('join')}
+                    className="group flex w-full items-center gap-4 rounded-2xl bg-white/[0.04] p-4 text-left ring-1 ring-white/10 transition hover:bg-white/[0.07] hover:ring-gold-400/40">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/[0.07] text-slate-300 ring-1 ring-white/10"><Users size={20}/></div>
+                      <div className="min-w-0 flex-1">
+                          <div className="font-bold text-white">Join a league</div>
+                          <div className="text-xs text-slate-500">Enter the six-digit code your commissioner shared.</div>
+                      </div>
+                      <ArrowRight size={18} className="shrink-0 text-slate-600 transition group-hover:text-gold-300"/>
+                  </button>
+              </div>
+          </>
+      );
+
+      if (onboardingMode === 'join') return shell(
+          <>
+              <button onClick={() => setOnboardingMode(null)} className="mb-4 flex items-center gap-1.5 text-sm font-bold text-slate-500 transition hover:text-white">
+                  <ChevronLeft size={16}/> Back
+              </button>
+              <div className="mb-6">
+                  <div className="eyebrow text-gold-400/80">Join a league</div>
+                  <h2 className="mt-1 text-2xl font-extrabold tracking-tightest text-white">Enter your code</h2>
+                  <p className="mt-1.5 text-sm text-slate-500">Your commissioner can find this on their Admin tab.</p>
+              </div>
+              <form onSubmit={handleJoinLeague} className="space-y-3">
+                  <input
+                      value={joinLeagueId}
+                      onChange={e => setJoinLeagueId(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      inputMode="numeric"
+                      className="field py-4 text-center font-mono text-2xl font-bold tracking-[0.4em]"
+                      placeholder="000000"
+                      required
+                  />
+                  <button className="btn-gold w-full py-3" disabled={isProcessing || joinLeagueId.length < 6}>
+                      {isProcessing ? <RefreshCw size={16} className="animate-spin"/> : <>Join league <ArrowRight size={16}/></>}
+                  </button>
+              </form>
+          </>
+      );
+
+      // --- Create wizard ---
+      const canAdvance = setupStep === 0
+          ? draft.name.trim().length > 0
+          : setupStep === 1
+          ? draft.seasonEnd >= draft.seasonStart && Number(draft.monthlyAllowance) > 0
+          : draft.pool.length > 0;
+
+      return shell(
+          <>
+              <button onClick={() => setupStep === 0 ? setOnboardingMode(null) : setSetupStep(s => s - 1)}
+                className="mb-4 flex items-center gap-1.5 text-sm font-bold text-slate-500 transition hover:text-white">
+                  <ChevronLeft size={16}/> Back
+              </button>
+              <WizardSteps steps={['Basics', 'Season', 'Stocks']} current={setupStep} />
+
+              {setupStep === 0 && (
+                  <div className="space-y-4">
+                      <div>
+                          <label className="eyebrow mb-1.5 block">League name</label>
+                          <input value={draft.name} onChange={e => patch({ name: e.target.value })} className="field" placeholder="e.g. Wall Street Warriors" autoFocus />
+                      </div>
+                      <div>
+                          <label className="eyebrow mb-1.5 block">Number of players</label>
+                          <div className="flex items-center gap-2">
+                              <button type="button" onClick={() => patch({ maxPlayers: Math.max(2, Number(draft.maxPlayers) - 1) })} className="btn-ghost h-11 w-11 p-0"><Minus size={16}/></button>
+                              <input type="number" min="2" max="20" value={draft.maxPlayers} onChange={e => patch({ maxPlayers: e.target.value })} className="field text-center font-mono text-lg font-bold" />
+                              <button type="button" onClick={() => patch({ maxPlayers: Math.min(20, Number(draft.maxPlayers) + 1) })} className="btn-ghost h-11 w-11 p-0"><Plus size={16}/></button>
+                          </div>
+                          <p className="mt-1.5 text-xs text-slate-600">The league stops accepting joins once it's full.</p>
+                      </div>
+                      <label className="flex cursor-pointer items-center gap-2.5 text-sm text-slate-400">
+                          <input type="checkbox" checked={draft.adminPlays} onChange={e => patch({ adminPlays: e.target.checked })} className="h-4 w-4 rounded accent-gold-400"/>
+                          I'm playing too, not just running it
+                      </label>
+                  </div>
+              )}
+
+              {setupStep === 1 && (
+                  <div className="space-y-4">
+                      <div>
+                          <label className="eyebrow mb-1.5 block">Season starts</label>
+                          <MonthPicker value={draft.seasonStart} onChange={v => patch({ seasonStart: v })} />
+                      </div>
+                      <div>
+                          <label className="eyebrow mb-1.5 block">Regular season ends</label>
+                          <MonthPicker value={draft.seasonEnd} onChange={v => patch({ seasonEnd: v })} />
+                      </div>
+                      <div className="surface-sunken px-4 py-3">
+                          <div className="flex items-center justify-between">
+                              <span className="eyebrow">Playoffs</span>
+                              <span className="font-mono text-sm font-bold text-gold-300">{monthLabel(playoff)}</span>
+                          </div>
+                          <p className="mt-1 text-xs text-slate-600">
+                              {regularMonths.length > 0
+                                  ? `${regularMonths.length} regular month${regularMonths.length === 1 ? '' : 's'} (${monthLabel(draft.seasonStart, true)} – ${monthLabel(draft.seasonEnd, true)}), then playoffs the month after.`
+                                  : 'The season must end on or after it starts.'}
+                          </p>
+                      </div>
+                      <div>
+                          <label className="eyebrow mb-1.5 block">Monthly allowance per player</label>
+                          <div className="relative">
+                              <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 font-mono text-slate-500">$</span>
+                              <input type="number" min="1" value={draft.monthlyAllowance} onChange={e => patch({ monthlyAllowance: e.target.value })} className="field pl-8 font-mono text-lg font-bold" />
+                          </div>
+                          <p className="mt-1.5 text-xs text-slate-600">Deposited into every player's cash at the start of each month. Holdings carry over.</p>
+                      </div>
+                  </div>
+              )}
+
+              {setupStep === 2 && (
+                  <div className="space-y-4">
+                      <div>
+                          <label className="eyebrow mb-1.5 block">Add a ticker</label>
+                          <div className="flex gap-2">
+                              <input
+                                  value={poolSearch}
+                                  onChange={e => setPoolSearch(e.target.value.toUpperCase())}
+                                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addTickerToDraft(); } }}
+                                  className="field flex-1 uppercase"
+                                  placeholder="AAPL"
+                              />
+                              <button type="button" onClick={addTickerToDraft} disabled={isSearchingPool} className="btn-ghost px-4">
+                                  {isSearchingPool ? <RefreshCw size={15} className="animate-spin"/> : <Plus size={15}/>}
+                              </button>
+                          </div>
+                      </div>
+
+                      {masterStocks.filter(s => !draft.pool.includes(s.id)).length > 0 && (
+                          <div>
+                              <div className="eyebrow mb-1.5">Quick add</div>
+                              <div className="flex flex-wrap gap-1.5">
+                                  {masterStocks.filter(s => !draft.pool.includes(s.id)).slice(0, 12).map(s => (
+                                      <button key={s.id} type="button" onClick={() => patch({ pool: [...draft.pool, s.id] })}
+                                        className="chip-muted transition hover:bg-white/[0.12] hover:text-white">
+                                          <Plus size={11}/> {s.id}
+                                      </button>
+                                  ))}
+                              </div>
+                          </div>
+                      )}
+
+                      <div>
+                          <div className="mb-1.5 flex items-center justify-between">
+                              <span className="eyebrow">Stock pool</span>
+                              <span className="eyebrow">{draft.pool.length} picked</span>
+                          </div>
+                          {draft.pool.length === 0 ? (
+                              <div className="surface-sunken px-4 py-8 text-center text-sm text-slate-600">
+                                  Nothing yet — add the tickers your league can invest in.
+                              </div>
+                          ) : (
+                              <div className="max-h-52 space-y-1 overflow-y-auto pr-1">
+                                  {draft.pool.map(id => (
+                                      <div key={id} className="surface-sunken flex items-center justify-between px-3 py-2">
+                                          <div className="min-w-0">
+                                              <span className="font-mono text-sm font-bold text-white">{id}</span>
+                                              <span className="ml-2 truncate text-xs text-slate-500">{stockName(id)}</span>
+                                          </div>
+                                          <button type="button" onClick={() => patch({ pool: draft.pool.filter(p => p !== id) })}
+                                            className="shrink-0 text-slate-600 transition hover:text-rose-400"><X size={14}/></button>
+                                      </div>
+                                  ))}
+                              </div>
+                          )}
+                          <p className="mt-1.5 text-xs text-slate-600">You can edit this pool any month from the Admin tab.</p>
+                      </div>
+                  </div>
+              )}
+
+              <div className="mt-6">
+                  {setupStep < 2 ? (
+                      <button type="button" onClick={() => setSetupStep(s => s + 1)} disabled={!canAdvance} className="btn-gold w-full py-3">
+                          Continue <ArrowRight size={16}/>
+                      </button>
+                  ) : (
+                      <button type="button" onClick={handleCreateLeague} disabled={!canAdvance || isProcessing} className="btn-gold w-full py-3">
+                          {isProcessing ? <RefreshCw size={16} className="animate-spin"/> : <>Create league <Crown size={16}/></>}
+                      </button>
+                  )}
+              </div>
+          </>
+      );
+  };
+
   const renderLeagueHub = () => {
       const standings = [...leaguePlayers].filter(p => p.isPlayer).sort((a,b) => b.wins - a.wins || b.points - a.points);
       const status = STATUS_META[activeLeague?.status] || STATUS_META.drafting;
@@ -845,7 +1377,7 @@ export default function FiveStarApp() {
 
           {!activeMembership ? (
               <EmptyState icon={Trophy} title="No leagues yet" body="Create a league and invite your friends, or join one with a six-digit code.">
-                  <button onClick={() => setShowLeagueCreator(true)} className="btn-gold">Create or join a league <ArrowRight size={16}/></button>
+                  <button onClick={() => { setOnboardingMode(null); setShowLeagueCreator(true); }} className="btn-gold">Create or join a league <ArrowRight size={16}/></button>
               </EmptyState>
           ) : (
               <>
@@ -862,7 +1394,7 @@ export default function FiveStarApp() {
                   </div>
                   <div className="mt-5 grid grid-cols-3 gap-2">
                       {[
-                          { label: 'Month', value: activeLeague?.month ?? '—' },
+                          { label: 'Month', value: monthLabel(activeLeague?.currentMonth, true) },
                           { label: 'Players', value: standings.length },
                           { label: 'Code', value: activeMembership.leagueId },
                       ].map(s => (
@@ -914,34 +1446,9 @@ export default function FiveStarApp() {
               </>
           )}
           {showLeagueCreator && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
-                  <div className="surface w-full max-w-md animate-fade-up p-6 shadow-lift">
-                      <div className="mb-5 flex items-center justify-between">
-                          <h2 className="text-xl font-extrabold tracking-tightest text-white">Start playing</h2>
-                          <button onClick={()=>setShowLeagueCreator(false)} className="text-slate-500 transition hover:text-white"><X size={20}/></button>
-                      </div>
-
-                      <div className="space-y-3">
-                          <h3 className="eyebrow">Create a new league</h3>
-                          <input value={createLeagueName} onChange={e=>setCreateLeagueName(e.target.value)} className="field" placeholder="League name" />
-                          <label className="flex cursor-pointer items-center gap-2.5 text-sm text-slate-400">
-                              <input type="checkbox" checked={adminPlays} onChange={e=>setAdminPlays(e.target.checked)} className="h-4 w-4 rounded accent-gold-400"/>
-                              Commissioner plays too
-                          </label>
-                          <button onClick={handleCreateLeague} disabled={isProcessing} className="btn-gold w-full">Create league</button>
-                      </div>
-
-                      <div className="my-6 flex items-center gap-3">
-                          <div className="h-px flex-1 hairline" />
-                          <span className="eyebrow">or</span>
-                          <div className="h-px flex-1 hairline" />
-                      </div>
-
-                      <div className="space-y-3">
-                          <h3 className="eyebrow">Join an existing league</h3>
-                          <input value={joinLeagueId} onChange={e=>setJoinLeagueId(e.target.value)} className="field text-center font-mono text-lg tracking-[0.3em]" placeholder="000000" />
-                          <button onClick={handleJoinLeague} disabled={isProcessing} className="btn-ghost w-full">Join with code</button>
-                      </div>
+              <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/85 p-4 backdrop-blur-sm">
+                  <div className="my-auto w-full max-w-md animate-fade-up">
+                      {renderOnboarding(true)}
                   </div>
               </div>
           )}
@@ -951,7 +1458,9 @@ export default function FiveStarApp() {
 
   const renderMarket = () => {
     // 1. Prepare Data
-    let stocksToRender = masterStocks.filter(s=> s.id.includes(stockSearch.toUpperCase())).map(stock => {
+    // Only this league's pool is investable, not the global catalogue.
+    const pool = activeLeague?.stockPool || [];
+    let stocksToRender = masterStocks.filter(s => pool.includes(s.id) && s.id.includes(stockSearch.toUpperCase())).map(stock => {
       const live = liveMarketData[stock.id];
       const price = live?.c || 0;
       
@@ -962,8 +1471,11 @@ export default function FiveStarApp() {
       const totalChange = price && initialBase ? ((price - initialBase) / initialBase) * 100 : 0;
 
       const inRoster = activeMembership?.roster?.find((i) => i.id === stock.id);
+      const owner = franchiseOwners[stock.id];
+      const lockedBy = owner && owner.userId !== user?.uid ? owner : null;
+      const isMyFranchise = owner && owner.userId === user?.uid;
 
-      return { ...stock, price, mtdBase, mtdChange, totalChange, inRoster };
+      return { ...stock, price, mtdBase, mtdChange, totalChange, inRoster, lockedBy, isMyFranchise };
     });
 
     // 2. Sort Data
@@ -1027,17 +1539,24 @@ export default function FiveStarApp() {
                       <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
                               <span className="font-bold tracking-tight text-white">{stock.id}</span>
-                              {stock.sector && stock.sector !== 'Unknown' && <span className="eyebrow">{stock.sector}</span>}
+                              {stock.isMyFranchise && <span className="eyebrow text-gold-400">Franchise</span>}
+                              {!stock.isMyFranchise && stock.sector && stock.sector !== 'Unknown' && <span className="eyebrow">{stock.sector}</span>}
                           </div>
                           <div className="truncate text-xs text-slate-500">{stock.name}</div>
-                          <div className="mt-0.5 flex items-center gap-1 font-mono text-[11px] text-slate-600">
-                              Base ${stock.mtdBase.toFixed(2)}
-                              {activeMembership?.isAdmin && (
-                                <button onClick={()=>updateBasePrice(stock.id)} className="text-slate-600 transition hover:text-gold-400" aria-label={`Edit base price for ${stock.id}`}>
-                                  <Edit2 size={10}/>
-                                </button>
-                              )}
-                          </div>
+                          {stock.lockedBy ? (
+                              <div className="mt-0.5 flex items-center gap-1 text-[11px] font-bold text-slate-600">
+                                  <Lock size={10}/> {stock.lockedBy.name}'s franchise
+                              </div>
+                          ) : (
+                              <div className="mt-0.5 flex items-center gap-1 font-mono text-[11px] text-slate-600">
+                                  Base ${stock.mtdBase.toFixed(2)}
+                                  {activeMembership?.isAdmin && (
+                                    <button onClick={()=>updateBasePrice(stock.id)} className="text-slate-600 transition hover:text-gold-400" aria-label={`Edit base price for ${stock.id}`}>
+                                      <Edit2 size={10}/>
+                                    </button>
+                                  )}
+                              </div>
+                          )}
                       </div>
 
                       <div className="shrink-0 text-right">
@@ -1056,7 +1575,9 @@ export default function FiveStarApp() {
 
                       {canDraft && (
                         <div className="w-8 shrink-0 text-center">
-                          {stock.inRoster
+                          {stock.lockedBy
+                            ? <Lock size={16} className="mx-auto text-slate-700" aria-label={`Locked to ${stock.lockedBy.name}`} />
+                            : stock.inRoster
                             ? <CheckCircle2 size={18} className="mx-auto text-gold-400" aria-label="Owned" />
                             : <button onClick={() => addToTeam(stock.id)} aria-label={`Add ${stock.id} to team`}
                                 className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg bg-white/[0.06] text-slate-300 ring-1 ring-white/10 transition hover:bg-gold-400 hover:text-ink-950 hover:ring-gold-400 active:scale-95">
@@ -1210,7 +1731,7 @@ export default function FiveStarApp() {
                 <div className="surface relative overflow-hidden bg-card-glow p-6">
                     <div className="mb-8 text-center">
                         <div className="eyebrow text-gold-400/80">{m.type || 'Regular season'}</div>
-                        <h2 className="mt-1 text-2xl font-extrabold tracking-tightest text-white">Month {activeLeague?.month}</h2>
+                        <h2 className="mt-1 text-2xl font-extrabold tracking-tightest text-white">{monthLabel(activeLeague?.currentMonth)}</h2>
                         {isLive && (
                           <span className="chip mt-2 bg-emerald-400/15 text-emerald-300 ring-1 ring-emerald-400/30">
                             <span className="h-1.5 w-1.5 animate-ticker-pulse rounded-full bg-current" /> Live
@@ -1256,7 +1777,7 @@ export default function FiveStarApp() {
 
       return (
         <div className="space-y-3">
-            <SectionHeading icon={Swords} title={`Month ${activeLeague?.month ?? '—'}`} meta={isLive ? 'Live scoring' : 'Head to head'} />
+            <SectionHeading icon={Swords} title={monthLabel(activeLeague?.currentMonth)} meta={isLive ? 'Live scoring' : isPlayoffMonth ? 'Playoffs' : 'Head to head'} />
 
             {!activeLeague?.matchups?.length ? (
                 <EmptyState icon={Swords} title="No matchups yet" body="The commissioner hasn't generated the schedule for this month." />
@@ -1314,14 +1835,107 @@ export default function FiveStarApp() {
       <div className="space-y-4">
           <SectionHeading icon={Shield} title="Commissioner" meta={STATUS_META[activeLeague?.status]?.label} />
 
-          <Panel icon={Crown} title="Season controls" accent="gold" description="Move the league through the month: open trading, lock it, then score it.">
-             <div className="grid gap-2">
-                {activeLeague?.status === 'drafting' && <button onClick={startLeague} className="btn-gold w-full py-3"><PlayCircle size={16}/> Start league &amp; generate schedule</button>}
-                {activeLeague?.status?.includes('ready') && <button onClick={startMonth} className="btn-gold w-full py-3"><PlayCircle size={16}/> Start month {activeLeague.month}</button>}
-                {activeLeague?.status === 'active' && <button onClick={endMonth} className="btn-gold w-full py-3"><Lock size={16}/> End month &amp; score matchups</button>}
-                {activeLeague?.status === 'completed' && <button onClick={nextMonth} className="btn-ghost w-full py-3"><ArrowRight size={16}/> Advance to next month</button>}
-                {activeLeague?.status === 'active' && <button onClick={resetToDraft} className="btn-ghost w-full"><RotateCcw size={14}/> Reset current month</button>}
+          <Panel icon={Crown} title="Season controls" accent="gold"
+            description={`${monthLabel(activeLeague?.seasonStart)} – ${monthLabel(activeLeague?.seasonEnd)}, playoffs ${monthLabel(activeLeague?.playoffMonth)}. $${Number(activeLeague?.monthlyAllowance || 0).toLocaleString()} deposited per player each month.`}>
+             <div className="surface-sunken mb-3 flex items-center justify-between px-4 py-3">
+                 <div>
+                     <div className="eyebrow">Open month</div>
+                     <div className="mt-0.5 text-lg font-extrabold tracking-tightest text-white">{monthLabel(activeLeague?.currentMonth)}</div>
+                 </div>
+                 <span className={STATUS_META[activeLeague?.status]?.chip || 'chip-muted'}>
+                     {STATUS_META[activeLeague?.status]?.live && <span className="h-1.5 w-1.5 animate-ticker-pulse rounded-full bg-current" />}
+                     {STATUS_META[activeLeague?.status]?.label || activeLeague?.status}
+                 </span>
              </div>
+             <div className="grid gap-2">
+                {activeLeague?.status === 'setup' && <button onClick={startLeague} className="btn-gold w-full py-3"><PlayCircle size={16}/> Start league &amp; generate schedule</button>}
+                {activeLeague?.status === 'ready' && <button onClick={startMonth} className="btn-gold w-full py-3"><PlayCircle size={16}/> Open {monthLabel(activeLeague.currentMonth, true)} for trading</button>}
+                {activeLeague?.status === 'active' && <button onClick={endMonth} className="btn-gold w-full py-3"><Lock size={16}/> Close &amp; score {monthLabel(activeLeague.currentMonth, true)}</button>}
+                {activeLeague?.status === 'completed' && <button onClick={nextMonth} className="btn-gold w-full py-3"><ArrowRight size={16}/> Advance to {monthLabel(addMonths(activeLeague.currentMonth, 1), true)}</button>}
+                {['active','completed'].includes(activeLeague?.status) && <button onClick={resetToDraft} className="btn-ghost w-full"><RotateCcw size={14}/> Reopen this month</button>}
+             </div>
+
+             {activeLeague?.status !== 'setup' && allMonths.length > 0 && (
+               <div className="mt-4 border-t border-white/[0.07] pt-4">
+                  <div className="eyebrow mb-2">Jump to a month</div>
+                  <div className="flex flex-wrap gap-1.5">
+                      {allMonths.map(m => (
+                          <button key={m} onClick={() => jumpToMonth(m)}
+                            className={`chip transition ${m === activeLeague.currentMonth
+                                ? 'bg-gold-sheen text-ink-950'
+                                : 'bg-white/[0.06] text-slate-400 ring-1 ring-white/10 hover:bg-white/[0.12] hover:text-white'}`}>
+                              {monthLabel(m, true)}{m === activeLeague.playoffMonth && ' 🏆'}
+                          </button>
+                      ))}
+                  </div>
+                  <p className="mt-2 text-xs text-slate-600">Starting a league mid-season? Jump the pointer forward once you've backfilled the earlier months below.</p>
+               </div>
+             )}
+          </Panel>
+
+          <Panel icon={Calendar} title="Month results" accent="orange"
+            description="Enter each player's real % return for a month. Wins, losses and points are recalculated from every scored month.">
+              {allMonths.length === 0 || !activeLeague?.schedule || Object.keys(activeLeague.schedule).length === 0 ? (
+                  <p className="text-xs text-slate-500">Generate the schedule first — then every month becomes editable here.</p>
+              ) : (
+                  <div className="space-y-1.5">
+                      {allMonths.map(m => {
+                          const matchupsForMonth = activeLeague.schedule?.[m] || [];
+                          const scored = matchupsForMonth.some(x => x.scored);
+                          return (
+                              <button key={m} onClick={() => openBackfill(m)} disabled={matchupsForMonth.length === 0}
+                                className="surface-sunken flex w-full items-center justify-between px-3 py-2.5 text-left transition hover:bg-white/[0.06] disabled:opacity-40">
+                                  <div className="flex items-center gap-2">
+                                      <span className="text-sm font-bold text-white">{monthLabel(m)}</span>
+                                      {m === activeLeague.currentMonth && <span className="eyebrow text-gold-400">Open</span>}
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                      <span className={`eyebrow ${scored ? 'text-emerald-400' : 'text-slate-600'}`}>
+                                          {matchupsForMonth.length === 0 ? 'No matchups' : scored ? 'Scored' : 'Not scored'}
+                                      </span>
+                                      <Edit2 size={13} className="text-slate-600"/>
+                                  </div>
+                              </button>
+                          );
+                      })}
+                  </div>
+              )}
+          </Panel>
+
+          <Panel icon={Shield} title="Franchise stocks" accent="pink"
+            description={`Each player locks ${FRANCHISE_SLOTS} stocks only they can invest in. Assign them here until the draft exists.`}>
+              {leaguePlayers.filter(p => p.isPlayer).length === 0 ? (
+                  <p className="text-xs text-slate-500">No players yet.</p>
+              ) : (
+                  <div className="space-y-3">
+                      {leaguePlayers.filter(p => p.isPlayer).map(p => {
+                          const picks = p.franchiseStocks || [];
+                          const available = (activeLeague?.stockPool || []).filter(id => !franchiseOwners[id] || franchiseOwners[id].userId === p.userId);
+                          return (
+                              <div key={p.id} className="surface-sunken p-3">
+                                  <div className="mb-2 flex items-center justify-between">
+                                      <span className="truncate text-sm font-bold text-white">{p.name}</span>
+                                      <span className={`eyebrow ${picks.length === FRANCHISE_SLOTS ? 'text-gold-400' : ''}`}>{picks.length} / {FRANCHISE_SLOTS}</span>
+                                  </div>
+                                  <div className="flex flex-wrap gap-1.5">
+                                      {available.map(id => {
+                                          const chosen = picks.includes(id);
+                                          return (
+                                              <button key={id} onClick={() => toggleFranchiseStock(p, id)}
+                                                className={`chip transition ${chosen
+                                                    ? 'bg-gold-sheen text-ink-950'
+                                                    : 'bg-white/[0.05] text-slate-500 ring-1 ring-white/10 hover:bg-white/[0.10] hover:text-white'}`}>
+                                                  {chosen && <CheckCircle2 size={11}/>}{id}
+                                              </button>
+                                          );
+                                      })}
+                                      {available.length === 0 && <span className="text-xs text-slate-600">Every pool stock is taken by someone else.</span>}
+                                  </div>
+                              </div>
+                          );
+                      })}
+                  </div>
+              )}
           </Panel>
 
           <Panel icon={Settings} title="League info" accent="cyan">
@@ -1427,22 +2041,37 @@ export default function FiveStarApp() {
               </div>
           </Panel>
 
-          <Panel icon={BarChart3} title="Stock pool" accent="blue" description="Tickers available to every team in this league.">
+          <Panel icon={BarChart3} title="Stock pool" accent="blue" description="The tickers this league can invest in. Edit it whenever — usually between months.">
              <div className="mb-3 flex gap-2">
-                 <input placeholder="Add ticker (e.g. KO)" value={newStockTicker} onChange={e=>setNewStockTicker(e.target.value)} className="field-sm flex-1 py-2.5 uppercase" />
-                 <button onClick={addNewStock} disabled={isProcessing} className="btn-ghost px-4">{isProcessing ? <RefreshCw size={14} className="animate-spin"/> : <Plus size={14}/>} Add</button>
+                 <input
+                   placeholder="Add ticker (e.g. KO)"
+                   value={newStockTicker}
+                   onChange={e=>setNewStockTicker(e.target.value.toUpperCase())}
+                   onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addTickerToPool(); } }}
+                   className="field-sm flex-1 py-2.5 uppercase"
+                 />
+                 <button onClick={addTickerToPool} disabled={isProcessing} className="btn-ghost px-4">{isProcessing ? <RefreshCw size={14} className="animate-spin"/> : <Plus size={14}/>} Add</button>
              </div>
+             {(activeLeague?.stockPool || []).length === 0 ? (
+                 <p className="text-xs text-slate-500">The pool is empty — nobody can invest until you add tickers.</p>
+             ) : (
              <div className="max-h-60 space-y-1 overflow-y-auto pr-1">
-                 {masterStocks.map(s => (
-                     <div key={s.id} className="surface-sunken flex items-center justify-between px-3 py-2">
-                         <div className="min-w-0">
-                            <span className="font-mono text-sm font-bold text-white">{s.id}</span>
-                            <span className="ml-2 truncate text-xs text-slate-500">{s.name}</span>
+                 {(activeLeague?.stockPool || []).map(id => {
+                     const s = masterStocks.find(m => m.id === id);
+                     const owner = franchiseOwners[id];
+                     return (
+                         <div key={id} className="surface-sunken flex items-center justify-between px-3 py-2">
+                             <div className="min-w-0">
+                                <span className="font-mono text-sm font-bold text-white">{id}</span>
+                                <span className="ml-2 truncate text-xs text-slate-500">{s?.name || ''}</span>
+                                {owner && <span className="ml-2 eyebrow text-gold-400">{owner.name}</span>}
+                             </div>
+                             <button onClick={() => removeFromPool(id)} aria-label={`Remove ${id}`} className="shrink-0 text-slate-600 transition hover:text-rose-400"><Trash2 size={14}/></button>
                          </div>
-                         <button onClick={() => deleteStock(s.id)} aria-label={`Delete ${s.id}`} className="shrink-0 text-slate-600 transition hover:text-rose-400"><Trash2 size={14}/></button>
-                     </div>
-                 ))}
+                     );
+                 })}
              </div>
+             )}
           </Panel>
 
           <Panel icon={Trash2} title="Danger zone" accent="rose" description="Deleting a league removes every roster, matchup and record in it. This cannot be undone.">
@@ -1504,6 +2133,75 @@ export default function FiveStarApp() {
           </div>
       )}
 
+      {backfillMonth && (
+          <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/85 p-4 backdrop-blur-sm">
+              <div className="surface my-auto w-full max-w-md animate-fade-up p-6 shadow-lift">
+                  <div className="mb-1 flex items-start justify-between">
+                      <div>
+                          <div className="eyebrow text-gold-400/80">Record results</div>
+                          <h3 className="mt-0.5 text-xl font-extrabold tracking-tightest text-white">{monthLabel(backfillMonth)}</h3>
+                      </div>
+                      <button onClick={() => setBackfillMonth(null)} aria-label="Close" className="text-slate-500 transition hover:text-white"><X size={20}/></button>
+                  </div>
+                  <p className="mb-5 text-xs leading-relaxed text-slate-500">
+                      Enter each player's % return for the month. Wins and points recalculate across the whole season when you save.
+                  </p>
+
+                  {(activeLeague?.schedule?.[backfillMonth] || []).length === 0 ? (
+                      <p className="text-sm text-slate-500">No matchups were generated for this month.</p>
+                  ) : (
+                      <div className="space-y-2">
+                          {(activeLeague.schedule[backfillMonth]).map((m, i) => (
+                              <div key={i} className="surface-sunken p-3">
+                                  {m.type && <div className="eyebrow mb-2 text-center text-gold-400/90">{m.type}</div>}
+                                  <div className="flex items-center gap-2">
+                                      <div className="min-w-0 flex-1">
+                                          <div className="truncate text-xs font-bold text-slate-300">{m.p1Name}</div>
+                                          <div className="mt-1 flex items-center">
+                                              <input
+                                                  type="number" step="0.01"
+                                                  value={backfillScores[`${i}_p1`] ?? ''}
+                                                  onChange={e => setBackfillScores(s => ({ ...s, [`${i}_p1`]: e.target.value }))}
+                                                  className="field-sm w-full py-1.5 text-right font-mono"
+                                                  placeholder="0.00"
+                                              />
+                                              <span className="ml-1 font-mono text-xs text-slate-500">%</span>
+                                          </div>
+                                      </div>
+                                      <span className="shrink-0 pt-4 font-mono text-[10px] font-bold text-slate-600">VS</span>
+                                      <div className="min-w-0 flex-1">
+                                          <div className="truncate text-xs font-bold text-slate-300">{m.p2Name}</div>
+                                          {m.p2 === 'BYE' ? (
+                                              <div className="mt-1 py-1.5 text-right font-mono text-xs text-slate-600">bye</div>
+                                          ) : (
+                                              <div className="mt-1 flex items-center">
+                                                  <input
+                                                      type="number" step="0.01"
+                                                      value={backfillScores[`${i}_p2`] ?? ''}
+                                                      onChange={e => setBackfillScores(s => ({ ...s, [`${i}_p2`]: e.target.value }))}
+                                                      className="field-sm w-full py-1.5 text-right font-mono"
+                                                      placeholder="0.00"
+                                                  />
+                                                  <span className="ml-1 font-mono text-xs text-slate-500">%</span>
+                                              </div>
+                                          )}
+                                      </div>
+                                  </div>
+                              </div>
+                          ))}
+                      </div>
+                  )}
+
+                  <div className="mt-6 flex gap-2">
+                      <button onClick={saveBackfill} disabled={isProcessing} className="btn-gold flex-1">
+                          {isProcessing ? <RefreshCw size={15} className="animate-spin"/> : <><Save size={15}/> Save results</>}
+                      </button>
+                      <button onClick={() => setBackfillMonth(null)} className="btn-ghost flex-1">Cancel</button>
+                  </div>
+              </div>
+          </div>
+      )}
+
       {showProfile && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
               <div className="surface w-full max-w-sm animate-fade-up p-6 shadow-lift">
@@ -1534,7 +2232,7 @@ export default function FiveStarApp() {
       )}
 
       <main className="mx-auto max-w-2xl p-4">
-         {currentView === 'dashboard' && renderLeagueHub()}
+         {currentView === 'dashboard' && (memberships.length === 0 ? renderOnboarding(false) : renderLeagueHub())}
          {activeMembership && currentView === 'market' && renderMarket()}
          {activeMembership && currentView === 'team' && renderTeam()}
          {activeMembership && currentView === 'matchups' && renderMatchups()}
