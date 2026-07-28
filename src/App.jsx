@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  TrendingUp, Trophy, Plus, Minus, RefreshCw, Shield, Crown, PlayCircle, Lock, LogOut, CheckCircle2, RotateCcw, Search, Save, DollarSign, Wallet, Users, BarChart3, PieChart, Settings, ArrowRight, Copy, Swords, ChevronLeft, Calendar, Edit2, Trash2, User, Upload, X
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  TrendingUp, Trophy, Plus, Minus, RefreshCw, Shield, Crown, PlayCircle, Lock, LogOut, CheckCircle2, RotateCcw, Search, Save, DollarSign, Wallet, Users, BarChart3, PieChart, Settings, ArrowRight, Copy, Swords, ChevronLeft, Calendar, Edit2, Trash2, User, Upload, X, ArrowUp, ArrowDown, ArrowUpDown, Medal, Sparkles, Activity, CircleDollarSign
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
@@ -26,7 +26,6 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
-// Use the user provided key
 const FINNHUB_API_KEY = "d52p16hr01qggm5t4cegd52p16hr01qggm5t4cf0"; 
 
 const LOGO_URL = "https://i.postimg.cc/WpxKS20L/5star.png";
@@ -40,6 +39,23 @@ const INITIAL_STOCKS = [
   { id: 'GOOGL', name: 'Alphabet', sector: 'Tech' },
 ];
 
+// --- Display Constants ---
+
+const STATUS_META = {
+  drafting:              { label: 'Drafting',    chip: 'chip-muted' },
+  ready:                 { label: 'Ready',       chip: 'chip bg-sky-400/15 text-sky-300 ring-1 ring-sky-400/30' },
+  ready_to_start_month:  { label: 'Ready',       chip: 'chip bg-sky-400/15 text-sky-300 ring-1 ring-sky-400/30' },
+  active:                { label: 'Live',        chip: 'chip bg-emerald-400/15 text-emerald-300 ring-1 ring-emerald-400/30', live: true },
+  completed:             { label: 'Final',       chip: 'chip-gold' },
+};
+
+// Podium colours for the top three; everyone else gets the muted default.
+const RANK_STYLES = [
+  'bg-gold-sheen text-ink-950',
+  'bg-slate-300/90 text-ink-950',
+  'bg-amber-700/80 text-amber-100',
+];
+
 // --- Helper Functions ---
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -47,34 +63,122 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 // --- Components ---
 
 const Card = ({ children, className = "", onClick }) => (
-  <div onClick={onClick} className={`bg-slate-800 border border-slate-700 rounded-xl shadow-lg overflow-hidden ${className}`}>
+  <div
+    onClick={onClick}
+    className={`surface overflow-hidden ${onClick ? 'cursor-pointer transition duration-150 hover:ring-white/[0.16] hover:bg-ink-800/70 active:scale-[0.995]' : ''} ${className}`}
+  >
     {children}
   </div>
 );
 
-const Avatar = ({ url, name, size = "md", onClick }) => {
+const Avatar = ({ url, name, size = "md", onClick, className = "" }) => {
   const sizeClasses = {
-    sm: "w-8 h-8 text-xs",
+    sm: "w-8 h-8 text-[11px]",
     md: "w-10 h-10 text-sm",
-    lg: "w-16 h-16 text-lg",
-    xl: "w-32 h-32 text-2xl"
+    lg: "w-16 h-16 text-xl",
+    xl: "w-32 h-32 text-3xl"
   };
-  
+
+  const interactive = onClick ? 'cursor-pointer hover:ring-gold-400/70' : '';
+  const base = `rounded-full ring-2 ring-white/10 transition ${sizeClasses[size]} ${interactive} ${className}`;
+
   const content = url ? (
-    <img src={url} alt={name} className={`rounded-full object-cover border-2 border-slate-700 ${sizeClasses[size]} ${onClick ? 'cursor-pointer hover:border-emerald-500 transition-colors' : ''}`} />
+    <img src={url} alt={name} className={`object-cover ${base}`} />
   ) : (
-    <div className={`rounded-full bg-slate-700 flex items-center justify-center font-bold text-slate-300 border-2 border-slate-600 ${sizeClasses[size]} ${onClick ? 'cursor-pointer hover:border-emerald-500 transition-colors' : ''}`}>
-      {name ? name.charAt(0).toUpperCase() : '?'}
+    <div className={`flex items-center justify-center bg-ink-700 font-bold uppercase text-slate-400 ${base}`}>
+      {name ? name.charAt(0) : '?'}
     </div>
   );
 
-  return onClick ? <div onClick={onClick}>{content}</div> : content;
+  return onClick ? <div onClick={onClick} className="shrink-0">{content}</div> : content;
 };
+
+// The percentage return is the app's headline number — always signed, always tabular.
+const Pct = ({ value, className = "" }) => {
+  const v = Number(value) || 0;
+  const tone = v > 0 ? 'text-gain' : v < 0 ? 'text-loss' : 'text-slate-400';
+  return (
+    <span className={`font-mono font-bold tracking-tight ${tone} ${className}`}>
+      {v > 0 ? '+' : ''}{v.toFixed(2)}%
+    </span>
+  );
+};
+
+const SectionHeading = ({ icon: Icon, title, meta }) => (
+  <div className="mb-4 flex items-end justify-between gap-3">
+    <h2 className="flex items-center gap-2 text-lg font-extrabold tracking-tightest text-white">
+      {Icon && <Icon size={18} className="text-gold-400" />}
+      {title}
+    </h2>
+    {meta && <span className="eyebrow">{meta}</span>}
+  </div>
+);
+
+const EmptyState = ({ icon: Icon, title, body, children }) => (
+  <div className="surface flex flex-col items-center px-6 py-14 text-center">
+    {Icon && (
+      <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/[0.04] ring-1 ring-white/10">
+        <Icon size={24} className="text-slate-600" />
+      </div>
+    )}
+    <h3 className="text-base font-bold text-white">{title}</h3>
+    {body && <p className="mt-1 max-w-xs text-sm text-slate-500">{body}</p>}
+    {children && <div className="mt-5">{children}</div>}
+  </div>
+);
+
+// Admin panels: a coloured rail on the left carries the section's identity.
+const PANEL_ACCENTS = {
+  gold: 'from-gold-400 to-gold-600',
+  cyan: 'from-cyan-300 to-cyan-600',
+  orange: 'from-orange-300 to-orange-600',
+  pink: 'from-pink-300 to-pink-600',
+  purple: 'from-purple-300 to-purple-600',
+  blue: 'from-blue-300 to-blue-600',
+  rose: 'from-rose-300 to-rose-600',
+};
+
+const logoFallback = (e) => {
+  e.target.onerror = null;
+  e.target.src = "https://placehold.co/100x100/fbbf24/08090c?text=5";
+};
+
+// Defined at module scope so the auth inputs keep focus between renders.
+const AuthShell = ({ eyebrow, title, subtitle, children }) => (
+  <div className="relative flex min-h-screen items-center justify-center overflow-hidden p-4">
+    <div className="pointer-events-none absolute left-1/2 top-0 h-[420px] w-[720px] -translate-x-1/2 -translate-y-1/3 rounded-full bg-gold-400/10 blur-[100px]" />
+    <div className="surface relative w-full max-w-md animate-fade-up p-8 shadow-lift">
+      <div className="mb-7 flex flex-col items-center text-center">
+        <div className="mb-4 rounded-2xl bg-gold-sheen p-[2px] shadow-gold">
+          <img src={LOGO_URL} alt="FiveStar" className="h-14 w-14 rounded-[14px] bg-ink-950 object-contain p-1.5" onError={logoFallback} />
+        </div>
+        <div className="eyebrow text-gold-400/80">{eyebrow}</div>
+        <h1 className="mt-1.5 text-3xl font-extrabold tracking-tightest text-white">{title}</h1>
+        {subtitle && <p className="mt-2 text-sm text-slate-500">{subtitle}</p>}
+      </div>
+      {children}
+    </div>
+  </div>
+);
+
+const Panel = ({ icon: Icon, title, accent = 'gold', description, children }) => (
+  <section className="surface relative overflow-hidden p-5 pl-6">
+    <div className={`absolute inset-y-0 left-0 w-1 bg-gradient-to-b ${PANEL_ACCENTS[accent]}`} />
+    <h3 className="flex items-center gap-2 text-sm font-extrabold uppercase tracking-wide text-white">
+      {Icon && <Icon size={16} className="text-slate-400" />}
+      {title}
+    </h3>
+    {description && <p className="mt-1 text-xs leading-relaxed text-slate-500">{description}</p>}
+    <div className="mt-4">{children}</div>
+  </section>
+);
 
 // --- Main App ---
 
 export default function FiveStarApp() {
   const [user, setUser] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isDataLoaded, setIsDataLoaded] = useState(false);
   
   // Data States
   const [memberships, setMemberships] = useState([]); 
@@ -84,11 +188,22 @@ export default function FiveStarApp() {
   const [masterStocks, setMasterStocks] = useState([]);
   
   // Navigation State
-  const [currentView, setCurrentView] = useState('dashboard'); 
+  const [currentView, setCurrentView] = useState(() => {
+    return localStorage.getItem('fivestar_view') || 'dashboard';
+  });
+
   const [selectedMatchup, setSelectedMatchup] = useState(null);
   const [showLeagueCreator, setShowLeagueCreator] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [enlargedAvatar, setEnlargedAvatar] = useState(null);
+
+  // Sorting State
+  const [marketSortBy, setMarketSortBy] = useState('mtd'); // 'mtd', 'total', 'alpha'
+  const [marketSortDir, setMarketSortDir] = useState('desc'); // 'asc' or 'desc'
+
+  // Measured so the Market's sticky filter bar parks exactly under the header.
+  const headerRef = useRef(null);
+  const [headerHeight, setHeaderHeight] = useState(57);
 
   // Input State
   const [loginName, setLoginName] = useState('');
@@ -112,25 +227,67 @@ export default function FiveStarApp() {
   const [newLeagueNameSetting, setNewLeagueNameSetting] = useState('');
 
   // Real Data
-  const [liveMarketData, setLiveMarketData] = useState({});
+  const [liveMarketData, setLiveMarketData] = useState(() => {
+    const cached = localStorage.getItem('fivestar_market_data');
+    return cached ? JSON.parse(cached) : {};
+  });
 
-  // --- 1. Authentication ---
+  // --- Persistence Hooks ---
+  
+  useEffect(() => {
+    localStorage.setItem('fivestar_view', currentView);
+  }, [currentView]);
+
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const measure = () => setHeaderHeight(el.offsetHeight);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [user, hasProfile]);
+
+  useEffect(() => {
+    if (Object.keys(liveMarketData).length > 0) {
+      localStorage.setItem('fivestar_market_data', JSON.stringify(liveMarketData));
+    }
+  }, [liveMarketData]);
+
+  // --- 1. Authentication & Pre-fetching ---
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (u) => {
-      setUser(u);
       if (u) {
+        setUser(u);
         const userDoc = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', u.uid));
         if (userDoc.exists()) {
           setHasProfile(true);
           setLoginName(userDoc.data().name);
         }
+
+        const mQuery = query(
+            collection(db, 'artifacts', appId, 'public', 'data', 'league_players'), 
+            where('userId', '==', u.uid)
+        );
+        const mSnap = await getDocs(mQuery);
+        const mList = mSnap.docs.map(d => d.data());
+        setMemberships(mList);
+        if (mList.length > 0) setActiveMembership(mList[0]);
+
+        const sSnap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'stocks'));
+        setMasterStocks(sSnap.docs.map(d => d.data()));
+
+        setIsDataLoaded(true);
       } else {
+        setUser(null);
         setMemberships([]);
         setActiveMembership(null);
         setActiveLeague(null);
         setHasProfile(false);
+        setIsDataLoaded(true); 
       }
+      setIsLoading(false);
     });
     return unsub;
   }, []);
@@ -146,16 +303,13 @@ export default function FiveStarApp() {
     const unsub = onSnapshot(q, (snapshot) => {
         const list = snapshot.docs.map(d => d.data());
         setMemberships(list);
-        if (list.length > 0 && !activeMembership) {
-            setActiveMembership(list[0]);
-        }
+        if (list.length > 0 && !activeMembership) setActiveMembership(list[0]);
     });
     return unsub;
   }, [user, hasProfile]);
 
   useEffect(() => {
     if (!activeMembership) return;
-
     const leagueRef = doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId);
     const unsubLeague = onSnapshot(leagueRef, (docSnap) => {
         if (docSnap.exists()) {
@@ -176,11 +330,9 @@ export default function FiveStarApp() {
     const unsubPlayers = onSnapshot(playersQ, (snapshot) => {
         const list = snapshot.docs.map(d => ({ ...d.data(), id: d.id })); 
         setLeaguePlayers(list);
-        
-        const me = list.find(p => p.userId === user.uid);
+        const me = list.find(p => p.userId === user?.uid);
         if (me) setActiveMembership(me);
     });
-
     return () => {
         unsubLeague();
         unsubPlayers();
@@ -219,25 +371,29 @@ export default function FiveStarApp() {
     const fromTime = Math.floor(startOfMonth.getTime() / 1000);
     const toTime = Math.floor(now.getTime() / 1000);
 
+    let hasUpdates = false;
     for (const stock of masterStocks) {
       try {
         await sleep(200);
         const quoteRes = await fetch(`https://finnhub.io/api/v1/quote?symbol=${stock.id}&token=${FINNHUB_API_KEY}`);
         const quoteData = await quoteRes.json();
         
+        if (!quoteData.c && quoteData.c !== 0) continue;
+
         let monthOpen = newData[stock.id]?.monthOpen;
-        if (!monthOpen || monthOpen === quoteData.pc) {
+        if (!monthOpen || monthOpen === 0) {
             await sleep(200);
             const candleRes = await fetch(`https://finnhub.io/api/v1/stock/candle?symbol=${stock.id}&resolution=D&from=${fromTime}&to=${toTime}&token=${FINNHUB_API_KEY}`);
             const candleData = await candleRes.json();
             if (candleData.s === "ok" && candleData.o?.length > 0) monthOpen = candleData.o[0];
-            else monthOpen = quoteData.pc;
+            else monthOpen = quoteData.pc || quoteData.c;
         }
 
-        if (quoteData.c) newData[stock.id] = { c: quoteData.c, monthOpen };
-      } catch (err) { console.error(err); }
+        newData[stock.id] = { c: quoteData.c, monthOpen };
+        hasUpdates = true;
+      } catch (err) { console.error(`Error fetching ${stock.id}:`, err); }
     }
-    setLiveMarketData(newData);
+    if (hasUpdates) setLiveMarketData(newData);
   };
 
   useEffect(() => {
@@ -266,9 +422,7 @@ export default function FiveStarApp() {
         const userDoc = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', cred.user.uid));
         if (userDoc.exists()) setHasProfile(true);
       }
-    } catch (err) { 
-        alert(err.message); 
-    }
+    } catch (err) { alert(err.message); }
     setIsProcessing(false);
   };
 
@@ -280,9 +434,8 @@ export default function FiveStarApp() {
           await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', newLeagueId), {
               id: newLeagueId, name: createLeagueName, adminUid: user.uid,
               month: 4, activeStockIds: [], 
-              status: 'drafting', schedule: {}, matchups: [], startingPrices: {}, createdAt: Date.now()
+              status: 'drafting', schedule: {}, matchups: [], startingPrices: {}, initialPrices: {}, createdAt: Date.now()
           });
-          
           const playerDocId = `${newLeagueId}_${user.uid}`;
           const membershipData = {
               userId: user.uid, leagueId: newLeagueId, leagueName: createLeagueName, 
@@ -291,7 +444,6 @@ export default function FiveStarApp() {
               wins: 0, losses: 0, points: 0, avatar: ''
           };
           await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'league_players', playerDocId), membershipData);
-          
           setActiveMembership(membershipData);
           setShowLeagueCreator(false);
       } catch (err) { alert(err.message); }
@@ -305,7 +457,6 @@ export default function FiveStarApp() {
           const leagueDoc = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', joinLeagueId));
           if (!leagueDoc.exists()) throw new Error("League not found");
           const leagueData = leagueDoc.data();
-
           const playerDocId = `${joinLeagueId}_${user.uid}`;
           const membershipData = {
               userId: user.uid, leagueId: joinLeagueId, leagueName: leagueData.name, 
@@ -314,7 +465,6 @@ export default function FiveStarApp() {
               wins: 0, losses: 0, points: 0, avatar: ''
           };
           await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'league_players', playerDocId), membershipData);
-          
           setActiveMembership(membershipData);
           setJoinLeagueId('');
           setShowLeagueCreator(false);
@@ -326,11 +476,8 @@ export default function FiveStarApp() {
     const file = e.target.files[0];
     if (!file) return;
     if (file.size > 500000) return alert("File too large. Max 500KB.");
-    
     const reader = new FileReader();
-    reader.onloadend = () => {
-      setEditingAvatar(reader.result);
-    };
+    reader.onloadend = () => setEditingAvatar(reader.result);
     reader.readAsDataURL(file);
   };
 
@@ -340,26 +487,16 @@ export default function FiveStarApp() {
     setIsProcessing(true);
     try {
       const userRef = doc(db, 'artifacts', appId, 'public', 'data', 'users', user.uid);
-      await setDoc(userRef, { 
-        name: loginName, 
-        email: user.email,
-        createdAt: Date.now() 
-      });
-      
-      // Explicitly set these to trigger the UI shift immediately
+      await setDoc(userRef, { name: loginName, email: user.email, createdAt: Date.now() });
       setHasProfile(true);
       setLoginName(loginName); 
-    } catch (err) { 
-      console.error(err);
-      alert(err.message); 
-    }
+    } catch (err) { alert(err.message); }
     setIsProcessing(false);
   };
 
   const handleUpdateProfile = async (e) => {
       e.preventDefault();
       if (!activeMembership || !editingName.trim()) return;
-      
       const playerDocId = `${activeMembership.leagueId}_${user.uid}`;
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'league_players', playerDocId), {
           name: editingName,
@@ -370,11 +507,10 @@ export default function FiveStarApp() {
 
   const handleDeleteLeague = async () => {
     if (!activeMembership?.isAdmin) return;
-    if (confirm("Are you sure you want to PERMANENTLY DELETE this league? This action cannot be undone.")) {
+    if (confirm("Are you sure you want to PERMANENTLY DELETE this league?")) {
         setIsProcessing(true);
         try {
             await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId));
-            
             const batch = writeBatch(db);
             const playersQ = query(
                 collection(db, 'artifacts', appId, 'public', 'data', 'league_players'), 
@@ -383,14 +519,11 @@ export default function FiveStarApp() {
             const playerSnaps = await getDocs(playersQ);
             playerSnaps.forEach(d => batch.delete(d.ref));
             await batch.commit();
-
             setMemberships(prev => prev.filter(m => m.leagueId !== activeMembership.leagueId));
             setActiveMembership(null);
             setActiveLeague(null);
             setCurrentView('dashboard');
-        } catch (err) {
-            alert("Error deleting league: " + err.message);
-        }
+        } catch (err) { alert("Error deleting league: " + err.message); }
         setIsProcessing(false);
     }
   };
@@ -400,20 +533,15 @@ export default function FiveStarApp() {
   const handleUpdateMatchup = async (index, field, value) => {
     if (!activeLeague || !activeMembership?.isAdmin) return;
     const newMatchups = [...(activeLeague.matchups || [])];
-    
-    // Update the field
     newMatchups[index] = { ...newMatchups[index], [field]: value };
 
-    // Update names for display consistency
     if (field === 'p1' || field === 'p2') {
          const p = leaguePlayers.find(player => player.userId === value);
          const nameField = field === 'p1' ? 'p1Name' : 'p2Name';
          newMatchups[index][nameField] = p ? p.name : 'BYE';
-         
          const scoreField = field === 'p1' ? 'p1Score' : 'p2Score';
          if (value === 'BYE') newMatchups[index][scoreField] = 0;
     }
-
     await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), { matchups: newMatchups });
   };
 
@@ -457,7 +585,6 @@ export default function FiveStarApp() {
             stockName = data.result[0].description;
         }
     } catch (err) { console.error("Could not fetch name", err); }
-
     const ticker = newStockTicker.toUpperCase();
     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'stocks', ticker), { id: ticker, name: stockName, sector: 'Unknown' });
     setNewStockTicker('');
@@ -477,7 +604,6 @@ export default function FiveStarApp() {
     const roster = activeMembership.roster || [];
     if (roster.find((i) => i.id === stockId)) return alert("Already owned!");
     if (roster.length >= 30) return alert("Roster full! Max 30 stocks."); 
-    
     const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'league_players', `${activeMembership.leagueId}_${user.uid}`);
     await updateDoc(docRef, { roster: [...roster, { id: stockId, shares: 0 }] });
   };
@@ -487,7 +613,6 @@ export default function FiveStarApp() {
     const shares = parseFloat(newShares);
     if (isNaN(shares) || shares < 0) return;
     const roster = activeMembership.roster || [];
-    
     const newRoster = roster.map((i) => i.id === stockId ? { ...i, shares } : i);
     const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'league_players', `${activeMembership.leagueId}_${user.uid}`);
     await updateDoc(docRef, { roster: newRoster });
@@ -497,7 +622,6 @@ export default function FiveStarApp() {
       if (!activeMembership?.isPlayer) return;
       const cash = parseFloat(newCash);
       if (isNaN(cash) || cash < 0) return;
-      
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'league_players', `${activeMembership.leagueId}_${user.uid}`);
       await updateDoc(docRef, { cash: cash });
   };
@@ -523,7 +647,6 @@ export default function FiveStarApp() {
 
   const calculateReturn = (roster, cash, basePrices, manualStartValue) => {
       let currentValue = parseFloat(cash) || 0;
-      
       if (roster && Array.isArray(roster)) {
           roster.forEach(item => {
               const shares = parseFloat(item.shares) || 0;
@@ -531,7 +654,6 @@ export default function FiveStarApp() {
               currentValue += shares * currPrice;
           });
       }
-
       let startValue = 0;
       if (manualStartValue !== undefined && manualStartValue !== null && manualStartValue !== "") {
           startValue = parseFloat(manualStartValue);
@@ -545,7 +667,6 @@ export default function FiveStarApp() {
               });
           }
       }
-
       if (startValue === 0) return 0;
       return ((currentValue - startValue) / startValue) * 100;
   };
@@ -556,7 +677,6 @@ export default function FiveStarApp() {
       const playingMembers = leaguePlayers.filter(p => p.isPlayer);
       const schedule = {};
       const regularMonths = [4, 5, 6, 7, 8, 9, 10, 11];
-
       regularMonths.forEach(month => {
           const shuffled = [...playingMembers].sort(() => 0.5 - Math.random());
           const pairs = [];
@@ -572,11 +692,9 @@ export default function FiveStarApp() {
   const generatePlayoffs = () => {
       const sorted = [...leaguePlayers].filter(p => p.isPlayer).sort((a,b) => b.wins - a.wins || b.points - a.points);
       const matchups = [];
-
       if (sorted.length >= 2) matchups.push({ p1: sorted[0].userId, p2: sorted[1].userId, p1Name: sorted[0].name, p2Name: sorted[1].name, p1Score:0, p2Score:0, type: 'Championship' });
       if (sorted.length >= 4) matchups.push({ p1: sorted[2].userId, p2: sorted[3].userId, p1Name: sorted[2].name, p2Name: sorted[3].name, p1Score:0, p2Score:0, type: 'Consolation' });
       else if (sorted.length === 3) matchups.push({ p1: sorted[2].userId, p2: 'BYE', p1Name: sorted[2].name, p2Name: 'Bye Week', p1Score:0, p2Score:0, type: 'Consolation' });
-
       for (let i = 4; i < sorted.length; i+=2) {
           if (i+1 < sorted.length) matchups.push({ p1: sorted[i].userId, p2: sorted[i+1].userId, p1Name: sorted[i].name, p2Name: sorted[i+1].name, p1Score:0, p2Score:0, type: 'Exhibition' });
           else matchups.push({ p1: sorted[i].userId, p2: 'BYE', p1Name: sorted[i].name, p2Name: 'Bye Week', p1Score:0, p2Score:0, type: 'Exhibition' });
@@ -593,7 +711,15 @@ export default function FiveStarApp() {
       await fetchStockData();
       const starts = {};
       masterStocks.forEach(s => starts[s.id] = liveMarketData[s.id]?.c || 0);
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), { status: 'active', startingPrices: starts });
+      
+      const updateData = { status: 'active', startingPrices: starts };
+      
+      // NEW: Save Initial Prices if they don't exist (Game Start tracking)
+      if (!activeLeague.initialPrices || Object.keys(activeLeague.initialPrices).length === 0) {
+          updateData.initialPrices = starts;
+      }
+      
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), updateData);
   };
 
   const endMonth = async () => {
@@ -602,18 +728,15 @@ export default function FiveStarApp() {
       const updates = activeLeague.matchups.map((m) => {
           const p1 = leaguePlayers.find(p=>p.userId===m.p1);
           const p2 = leaguePlayers.find(p=>p.userId===m.p2);
-          
           return {
               ...m, 
               p1Score: parseFloat(calculateReturn(p1?.roster, p1?.cash, prices, p1?.startValue).toFixed(2)),
               p2Score: m.p2 === 'BYE' ? 0 : parseFloat(calculateReturn(p2?.roster, p2?.cash, prices, p2?.startValue).toFixed(2))
           }
       });
-      
       const batch = writeBatch(db);
       const newSchedule = { ...activeLeague.schedule, [activeLeague.month]: updates };
       batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), { status: 'completed', matchups: updates, schedule: newSchedule });
-      
       updates.forEach((m) => {
           const p1Doc = leaguePlayers.find(p=>p.userId===m.p1);
           if (p1Doc) batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'league_players', p1Doc.id), {
@@ -649,306 +772,535 @@ export default function FiveStarApp() {
 
   // --- Views ---
 
-  if (!user) return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-slate-900 border border-slate-800 p-8 rounded-2xl">
-         <div className="flex justify-center mb-6"><img src={LOGO_URL} alt="Logo" className="w-16 h-16 object-contain rounded-lg" onError={(e) => {e.target.onerror=null; e.target.src="https://placehold.co/100x100/10b981/ffffff?text=5Star"}} /></div>
-         <h1 className="text-2xl font-bold text-white text-center mb-6">FiveStar Login</h1>
-         <form onSubmit={handleAuth} className="space-y-4">
-           {isSignUp && <input value={loginName} onChange={e=>setLoginName(e.target.value)} className="w-full bg-slate-800 border-slate-700 text-white px-4 py-3 rounded-xl" placeholder="Player Name" required />}
-           <input type="email" value={email} onChange={e=>setEmail(e.target.value)} className="w-full bg-slate-800 border-slate-700 text-white px-4 py-3 rounded-xl" placeholder="Email" required />
-           <input type="password" value={password} onChange={e=>setPassword(e.target.value)} className="w-full bg-slate-800 border-slate-700 text-white px-4 py-3 rounded-xl" placeholder="Password" required />
-           <button className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl">{isProcessing ? '...' : (isSignUp?'Sign Up':'Login')}</button>
-           <button type="button" onClick={()=>setIsSignUp(!isSignUp)} className="w-full text-slate-400 text-sm">{isSignUp?'Have account? Login':'No account? Sign Up'}</button>
-         </form>
+  if (isLoading || (user && hasProfile && !isDataLoaded)) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="flex flex-col items-center gap-5">
+          <div className="relative">
+            <div className="absolute inset-0 rounded-full bg-gold-400/20 blur-xl" />
+            <RefreshCw className="relative h-9 w-9 animate-spin text-gold-400" />
+          </div>
+          <p className="eyebrow animate-ticker-pulse">Loading FiveStar</p>
+        </div>
       </div>
-    </div>
+    );
+  }
+
+  if (!user) return (
+    <AuthShell
+      eyebrow="Fantasy Stock League"
+      title={isSignUp ? 'Join the league' : 'Welcome back'}
+      subtitle={isSignUp ? 'Draft tickers, run your book, beat your friends.' : 'Sign in to check your standings.'}
+    >
+      <form onSubmit={handleAuth} className="space-y-3">
+        {isSignUp && <input value={loginName} onChange={e=>setLoginName(e.target.value)} className="field" placeholder="Player name" required />}
+        <input type="email" value={email} onChange={e=>setEmail(e.target.value)} className="field" placeholder="Email" required />
+        <input type="password" value={password} onChange={e=>setPassword(e.target.value)} className="field" placeholder="Password" required />
+        <button className="btn-gold w-full py-3.5" disabled={isProcessing}>
+          {isProcessing ? <RefreshCw size={16} className="animate-spin" /> : <>{isSignUp ? 'Create account' : 'Sign in'} <ArrowRight size={16} /></>}
+        </button>
+      </form>
+      <div className="mt-6 border-t border-white/[0.07] pt-5 text-center">
+        <button type="button" onClick={()=>setIsSignUp(!isSignUp)} className="text-sm text-slate-500 transition hover:text-gold-300">
+          {isSignUp ? 'Already have an account? ' : "Don't have an account? "}
+          <span className="font-bold text-slate-300">{isSignUp ? 'Sign in' : 'Sign up'}</span>
+        </button>
+      </div>
+    </AuthShell>
   );
 
   if (!hasProfile) return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-slate-900 border border-slate-800 p-8 rounded-2xl">
-         <div className="flex justify-center mb-6"><img src={LOGO_URL} alt="Logo" className="w-16 h-16 object-contain rounded-lg" onError={(e) => {e.target.onerror=null; e.target.src="https://placehold.co/100x100/10b981/ffffff?text=5Star"}} /></div>
-         <h1 className="text-2xl font-bold text-white text-center mb-6">Create Profile</h1>
-         <form onSubmit={handleCreateProfile} className="space-y-4">
-           <input value={loginName} onChange={e=>setLoginName(e.target.value)} className="w-full bg-slate-800 border-slate-700 text-white px-4 py-3 rounded-xl" placeholder="Enter Your Player Name" required />
-           <button className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl">{isProcessing ? 'Creating Profile...' : 'Start Playing'}</button>
-         </form>
-      </div>
-    </div>
+    <AuthShell eyebrow="One last step" title="Pick your name" subtitle="This is how you'll show up on the leaderboard.">
+      <form onSubmit={handleCreateProfile} className="space-y-3">
+        <input value={loginName} onChange={e=>setLoginName(e.target.value)} className="field text-center text-lg font-bold" placeholder="Your player name" required />
+        <button className="btn-gold w-full py-3.5" disabled={isProcessing}>
+          {isProcessing ? <RefreshCw size={16} className="animate-spin" /> : <>Start playing <ArrowRight size={16} /></>}
+        </button>
+      </form>
+    </AuthShell>
   );
 
   const renderLeagueHub = () => {
+      const standings = [...leaguePlayers].filter(p => p.isPlayer).sort((a,b) => b.wins - a.wins || b.points - a.points);
+      const status = STATUS_META[activeLeague?.status] || STATUS_META.drafting;
+
       return (
-          <div className="space-y-6">
-              <div className="flex gap-2 overflow-x-auto pb-2">
-                  {memberships.map(m => (
-                      <button 
-                        key={m.leagueId} 
-                        onClick={() => setActiveMembership(m)}
-                        className={`flex-shrink-0 px-4 py-2 rounded-lg border text-sm font-bold whitespace-nowrap transition-colors ${activeMembership?.leagueId === m.leagueId ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400' : 'bg-slate-800 border-slate-700 text-slate-400'}`}
-                      >
-                          {m.leagueName || `League ${m.leagueId.substring(0,4)}`}
-                      </button>
-                  ))}
-                  <button onClick={() => setShowLeagueCreator(true)} className="flex-shrink-0 px-3 py-2 rounded-lg bg-emerald-600 text-white font-bold text-sm"><Plus/></button>
+      <div className="space-y-5">
+          <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 pb-1">
+              {memberships.map(m => {
+                  const isActive = activeMembership?.leagueId === m.leagueId;
+                  return (
+                  <button key={m.leagueId} onClick={() => setActiveMembership(m)}
+                    className={`flex-shrink-0 whitespace-nowrap rounded-full px-4 py-2 text-sm font-bold transition ${isActive ? 'bg-gold-sheen text-ink-950 shadow-gold' : 'bg-white/[0.05] text-slate-400 ring-1 ring-white/10 hover:bg-white/[0.09] hover:text-slate-200'}`}
+                  >
+                      {m.leagueName || `League ${m.leagueId.substring(0,4)}`}
+                  </button>
+                  );
+              })}
+              <button onClick={() => setShowLeagueCreator(true)} aria-label="Add league"
+                className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-white/[0.05] text-slate-400 ring-1 ring-white/10 transition hover:bg-white/[0.09] hover:text-gold-300">
+                  <Plus size={16}/>
+              </button>
+          </div>
+
+          {!activeMembership ? (
+              <EmptyState icon={Trophy} title="No leagues yet" body="Create a league and invite your friends, or join one with a six-digit code.">
+                  <button onClick={() => setShowLeagueCreator(true)} className="btn-gold">Create or join a league <ArrowRight size={16}/></button>
+              </EmptyState>
+          ) : (
+              <>
+              <div className="surface relative overflow-hidden bg-card-glow p-5">
+                  <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                          <div className="eyebrow">Season standings</div>
+                          <h2 className="mt-1 truncate text-2xl font-extrabold tracking-tightest text-white">{activeLeague?.name || 'League'}</h2>
+                      </div>
+                      <span className={`${status.chip} shrink-0`}>
+                          {status.live && <span className="h-1.5 w-1.5 animate-ticker-pulse rounded-full bg-current" />}
+                          {status.label}
+                      </span>
+                  </div>
+                  <div className="mt-5 grid grid-cols-3 gap-2">
+                      {[
+                          { label: 'Month', value: activeLeague?.month ?? '—' },
+                          { label: 'Players', value: standings.length },
+                          { label: 'Code', value: activeMembership.leagueId },
+                      ].map(s => (
+                          <div key={s.label} className="surface-sunken px-3 py-2.5 text-center">
+                              <div className="eyebrow">{s.label}</div>
+                              <div className="mt-0.5 truncate font-mono text-sm font-bold text-white">{s.value}</div>
+                          </div>
+                      ))}
+                  </div>
               </div>
 
-              {!activeMembership ? (
-                  <div className="text-center text-slate-500 mt-20">
-                      <p>You are not in any leagues.</p>
-                      <button onClick={() => setShowLeagueCreator(true)} className="mt-4 text-emerald-400 font-bold underline">Join or Create one</button>
+              <div className="surface overflow-hidden">
+                  <div className="flex items-center justify-between border-b border-white/[0.07] px-4 py-3">
+                      <h3 className="flex items-center gap-2 text-sm font-extrabold uppercase tracking-wide text-white">
+                          <Trophy size={15} className="text-gold-400"/> Leaderboard
+                      </h3>
+                      <span className="eyebrow">Return</span>
                   </div>
-              ) : (
-                  <>
-                    <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
-                        <div className="p-4 bg-slate-900/50 border-b border-slate-700 flex justify-between items-center">
-                            <h3 className="font-bold text-white flex items-center gap-2"><Users size={18}/> {activeLeague?.name} Standings</h3>
-                            <span className="text-xs text-slate-500">{leaguePlayers.length} Players</span>
-                        </div>
-                        <div className="divide-y divide-slate-700">
-                            {[...leaguePlayers].filter(p => p.isPlayer).sort((a,b) => b.wins - a.wins || b.points - a.points).map((p, idx) => {
-                                // Calculate live return for display on League Hub
-                                const currentReturn = calculateReturn(p.roster, p.cash, activeLeague?.startingPrices || {}, p.startValue);
-                                
-                                return (
-                                <div key={p.userId} className="p-4 flex items-center justify-between">
-                                    <div className="flex items-center gap-3">
-                                        <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center font-bold text-slate-300">{idx+1}</div>
-                                        <Avatar url={p.avatar} name={p.name} size="md" onClick={() => setEnlargedAvatar({url: p.avatar, name: p.name})} />
-                                        <div>
-                                            <div className="font-bold text-white">{p.name || 'Unknown'} {p.isAdmin && '(Commish)'}</div>
-                                            <div className="text-xs text-slate-500">{p.wins || 0}W - {p.losses || 0}L</div>
-                                        </div>
-                                    </div>
-                                    <div className={`font-mono font-bold ${currentReturn >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                        {currentReturn > 0 ? '+' : ''}{currentReturn.toFixed(2)}%
-                                    </div>
-                                </div>
-                                );
-                            })}
-                        </div>
-                    </div>
-                  </>
-              )}
+                  {standings.length === 0 ? (
+                      <p className="px-4 py-10 text-center text-sm text-slate-500">No players have joined yet.</p>
+                  ) : (
+                  <div className="divide-y divide-white/[0.05]">
+                      {standings.map((p, idx) => {
+                          const currentReturn = calculateReturn(p.roster, p.cash, activeLeague?.startingPrices || {}, p.startValue);
+                          const isMe = p.userId === user?.uid;
+                          return (
+                          <div key={p.userId} className={`flex items-center gap-3 px-4 py-3 transition ${isMe ? 'bg-gold-400/[0.05]' : ''}`}>
+                              <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg font-mono text-xs font-bold ${RANK_STYLES[idx] || 'bg-white/[0.06] text-slate-500'}`}>
+                                  {idx + 1}
+                              </div>
+                              <Avatar url={p.avatar} name={p.name} size="md" onClick={() => setEnlargedAvatar({url: p.avatar, name: p.name})} />
+                              <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-1.5">
+                                      <span className="truncate font-bold text-white">{p.name || 'Unknown'}</span>
+                                      {isMe && <span className="eyebrow text-gold-400">You</span>}
+                                      {p.isAdmin && <Crown size={12} className="shrink-0 text-gold-400"/>}
+                                  </div>
+                                  <div className="mt-0.5 font-mono text-xs text-slate-500">
+                                      {p.wins || 0}<span className="text-slate-600">W</span> · {p.losses || 0}<span className="text-slate-600">L</span>
+                                  </div>
+                              </div>
+                              <Pct value={currentReturn} className="text-base" />
+                          </div>
+                          );
+                      })}
+                  </div>
+                  )}
+              </div>
+              </>
+          )}
+          {showLeagueCreator && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+                  <div className="surface w-full max-w-md animate-fade-up p-6 shadow-lift">
+                      <div className="mb-5 flex items-center justify-between">
+                          <h2 className="text-xl font-extrabold tracking-tightest text-white">Start playing</h2>
+                          <button onClick={()=>setShowLeagueCreator(false)} className="text-slate-500 transition hover:text-white"><X size={20}/></button>
+                      </div>
 
-              {/* Creator Modal */}
-              {showLeagueCreator && (
-                  <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
-                      <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl w-full max-w-md space-y-6">
-                          <h2 className="text-xl font-bold text-white">Start Playing</h2>
-                          <div className="space-y-3">
-                              <h3 className="text-sm font-bold text-slate-500 uppercase">Create New League</h3>
-                              <input value={createLeagueName} onChange={e=>setCreateLeagueName(e.target.value)} className="w-full bg-slate-800 border-slate-700 text-white px-4 py-2 rounded-lg" placeholder="League Name" />
-                              <div className="flex items-center gap-2"><input type="checkbox" checked={adminPlays} onChange={e=>setAdminPlays(e.target.checked)} className="accent-emerald-500"/><label className="text-slate-400 text-sm">Commissioner Plays?</label></div>
-                              <button onClick={handleCreateLeague} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 rounded-lg">Create</button>
-                          </div>
-                          <div className="h-px bg-slate-800"></div>
-                          <div className="space-y-3">
-                              <h3 className="text-sm font-bold text-slate-500 uppercase">Join Existing</h3>
-                              <input value={joinLeagueId} onChange={e=>setJoinLeagueId(e.target.value)} className="w-full bg-slate-800 border-slate-700 text-white px-4 py-2 rounded-lg" placeholder="League ID" />
-                              <button onClick={handleJoinLeague} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 rounded-lg">Join</button>
-                          </div>
-                          <button onClick={()=>setShowLeagueCreator(false)} className="w-full text-slate-500 py-2">Cancel</button>
+                      <div className="space-y-3">
+                          <h3 className="eyebrow">Create a new league</h3>
+                          <input value={createLeagueName} onChange={e=>setCreateLeagueName(e.target.value)} className="field" placeholder="League name" />
+                          <label className="flex cursor-pointer items-center gap-2.5 text-sm text-slate-400">
+                              <input type="checkbox" checked={adminPlays} onChange={e=>setAdminPlays(e.target.checked)} className="h-4 w-4 rounded accent-gold-400"/>
+                              Commissioner plays too
+                          </label>
+                          <button onClick={handleCreateLeague} disabled={isProcessing} className="btn-gold w-full">Create league</button>
+                      </div>
+
+                      <div className="my-6 flex items-center gap-3">
+                          <div className="h-px flex-1 hairline" />
+                          <span className="eyebrow">or</span>
+                          <div className="h-px flex-1 hairline" />
+                      </div>
+
+                      <div className="space-y-3">
+                          <h3 className="eyebrow">Join an existing league</h3>
+                          <input value={joinLeagueId} onChange={e=>setJoinLeagueId(e.target.value)} className="field text-center font-mono text-lg tracking-[0.3em]" placeholder="000000" />
+                          <button onClick={handleJoinLeague} disabled={isProcessing} className="btn-ghost w-full">Join with code</button>
                       </div>
                   </div>
-              )}
-          </div>
+              </div>
+          )}
+      </div>
       );
   };
 
-  const renderMarket = () => (
-      <div className="space-y-4">
-          <div className="flex gap-2 sticky top-0 bg-slate-950 z-10 py-2">
-              <div className="relative flex-1">
-                  <Search className="absolute left-3 top-2.5 text-slate-500" size={16} />
-                  <input className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-9 pr-4 py-2 text-sm text-white" placeholder="Search..." value={stockSearch} onChange={e => setStockSearch(e.target.value)} />
-              </div>
-          </div>
-          {masterStocks.filter(s=> s.id.includes(stockSearch.toUpperCase())).map(stock => {
-              const live = liveMarketData[stock.id];
-              const price = live?.c || 0;
-              const base = activeLeague?.startingPrices?.[stock.id] || live?.monthOpen || price;
-              const change = price && base ? ((price - base) / base) * 100 : 0;
-              const inRoster = activeMembership?.roster?.find((i) => i.id === stock.id);
+  const renderMarket = () => {
+    // 1. Prepare Data
+    let stocksToRender = masterStocks.filter(s=> s.id.includes(stockSearch.toUpperCase())).map(stock => {
+      const live = liveMarketData[stock.id];
+      const price = live?.c || 0;
+      
+      const mtdBase = activeLeague?.startingPrices?.[stock.id] || live?.monthOpen || price;
+      const mtdChange = price && mtdBase ? ((price - mtdBase) / mtdBase) * 100 : 0;
+      
+      const initialBase = activeLeague?.initialPrices?.[stock.id] || mtdBase; 
+      const totalChange = price && initialBase ? ((price - initialBase) / initialBase) * 100 : 0;
 
-              return (
-                  <Card key={stock.id} className="p-4">
-                      <div className="flex justify-between items-start">
-                          <div>
-                              <div className="font-bold text-white">{stock.id}</div>
-                              <div className="text-xs text-slate-400">{stock.name}</div>
-                              <div className="text-xs text-slate-500 mt-1 flex items-center gap-1">
-                                  Base: ${base.toFixed(2)}
-                                  {activeMembership?.isAdmin && <button onClick={()=>updateBasePrice(stock.id)} className="text-slate-400 hover:text-white"><Edit2 size={10}/></button>}
+      const inRoster = activeMembership?.roster?.find((i) => i.id === stock.id);
+
+      return { ...stock, price, mtdBase, mtdChange, totalChange, inRoster };
+    });
+
+    // 2. Sort Data
+    stocksToRender.sort((a, b) => {
+      if (marketSortBy === 'alpha') {
+          return marketSortDir === 'asc' ? a.id.localeCompare(b.id) : b.id.localeCompare(a.id);
+      }
+      const valA = marketSortBy === 'mtd' ? a.mtdChange : a.totalChange;
+      const valB = marketSortBy === 'mtd' ? b.mtdChange : b.totalChange;
+      return marketSortDir === 'asc' ? valA - valB : valB - valA;
+    });
+
+    const canDraft = activeMembership?.isPlayer && ['ready', 'active'].includes(activeLeague?.status);
+
+    const toggleSort = (key, defaultDir) => {
+      if (marketSortBy === key) setMarketSortDir(prev => prev === 'asc' ? 'desc' : 'asc');
+      else { setMarketSortBy(key); setMarketSortDir(defaultDir); }
+    };
+
+    const SORTS = [
+      { key: 'alpha', label: 'Ticker', dir: 'asc' },
+      { key: 'mtd', label: 'MTD', dir: 'desc' },
+      { key: 'total', label: 'Total', dir: 'desc' },
+    ];
+
+    return (
+      <div className="space-y-4">
+          <div style={{ top: headerHeight }} className="sticky z-10 -mx-4 space-y-2.5 bg-ink-950/90 px-4 pb-3 pt-3 backdrop-blur-md">
+            <div className="relative">
+                <Search className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-600" size={15} />
+                <input className="field py-2.5 pl-10" placeholder="Search tickers" value={stockSearch} onChange={e => setStockSearch(e.target.value)} />
+            </div>
+
+            <div className="flex gap-1 rounded-xl bg-black/30 p-1 ring-1 ring-white/[0.06]">
+              {SORTS.map(s => {
+                const active = marketSortBy === s.key;
+                return (
+                  <button key={s.key} onClick={() => toggleSort(s.key, s.dir)}
+                    className={`flex flex-1 items-center justify-center gap-1 rounded-lg py-1.5 text-xs font-bold transition ${active ? 'bg-white/[0.10] text-white shadow-sm' : 'text-slate-500 hover:text-slate-300'}`}
+                  >
+                    {s.label}
+                    {active
+                      ? (marketSortDir === 'desc' ? <ArrowDown size={11} className="text-gold-400"/> : <ArrowUp size={11} className="text-gold-400"/>)
+                      : <ArrowUpDown size={11} className="opacity-40"/>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {stocksToRender.length === 0 ? (
+            <EmptyState icon={BarChart3} title="No tickers found" body={stockSearch ? `Nothing in the pool matches "${stockSearch}".` : 'The commissioner has not added any stocks yet.'} />
+          ) : (
+          <div className="surface divide-y divide-white/[0.05] overflow-hidden">
+              {stocksToRender.map(stock => (
+                  <div key={stock.id} className="flex items-center gap-3 px-3.5 py-3 transition hover:bg-white/[0.02]">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/[0.05] font-mono text-[11px] font-bold text-gold-300 ring-1 ring-white/[0.07]">
+                          {stock.id.slice(0, 4)}
+                      </div>
+
+                      <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                              <span className="font-bold tracking-tight text-white">{stock.id}</span>
+                              {stock.sector && stock.sector !== 'Unknown' && <span className="eyebrow">{stock.sector}</span>}
+                          </div>
+                          <div className="truncate text-xs text-slate-500">{stock.name}</div>
+                          <div className="mt-0.5 flex items-center gap-1 font-mono text-[11px] text-slate-600">
+                              Base ${stock.mtdBase.toFixed(2)}
+                              {activeMembership?.isAdmin && (
+                                <button onClick={()=>updateBasePrice(stock.id)} className="text-slate-600 transition hover:text-gold-400" aria-label={`Edit base price for ${stock.id}`}>
+                                  <Edit2 size={10}/>
+                                </button>
+                              )}
+                          </div>
+                      </div>
+
+                      <div className="shrink-0 text-right">
+                          <div className="font-mono text-base font-bold text-white">${stock.price.toFixed(2)}</div>
+                          <div className="mt-1 flex flex-col items-end gap-0.5">
+                              <div className="flex items-center gap-1.5">
+                                  <span className="eyebrow">MTD</span>
+                                  <Pct value={stock.mtdChange} className="text-[11px]" />
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                  <span className="eyebrow">TOT</span>
+                                  <Pct value={stock.totalChange} className="text-[11px]" />
                               </div>
                           </div>
-                          <div className="text-right">
-                              <div className="font-mono text-white font-bold">${price.toFixed(2)}</div>
-                              <div className={`text-xs font-bold ${change>=0?'text-emerald-400':'text-rose-400'}`}>{change>0?'+':''}{change.toFixed(2)}% MTD</div>
-                          </div>
                       </div>
-                      <div className="mt-3 pt-3 border-t border-slate-700/50 flex justify-between items-center">
-                          <span className="text-[10px] uppercase text-slate-500 font-bold">{stock.sector}</span>
-                          {/* Allowed during ready OR active states. No "banned" check. */}
-                          {activeMembership?.isPlayer && ['ready', 'active'].includes(activeLeague?.status) && (
-                              inRoster ? <span className="text-emerald-500 text-xs font-bold flex items-center gap-1"><CheckCircle2 size={12}/> Owned</span> 
-                              : <button onClick={() => addToTeam(stock.id)} className="bg-emerald-600 text-white px-3 py-1 rounded text-xs font-bold">Add</button>
-                          )}
-                      </div>
-                  </Card>
-              )
-          })}
+
+                      {canDraft && (
+                        <div className="w-8 shrink-0 text-center">
+                          {stock.inRoster
+                            ? <CheckCircle2 size={18} className="mx-auto text-gold-400" aria-label="Owned" />
+                            : <button onClick={() => addToTeam(stock.id)} aria-label={`Add ${stock.id} to team`}
+                                className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg bg-white/[0.06] text-slate-300 ring-1 ring-white/10 transition hover:bg-gold-400 hover:text-ink-950 hover:ring-gold-400 active:scale-95">
+                                <Plus size={16}/>
+                              </button>}
+                        </div>
+                      )}
+                  </div>
+              ))}
+          </div>
+          )}
       </div>
-  );
+    );
+  };
 
   const renderTeam = () => {
-      if (!activeMembership?.isPlayer) return <div className="text-center text-slate-500 mt-20">Commissioners who do not play do not have a team.</div>;
+      if (!activeMembership?.isPlayer) return (
+        <EmptyState icon={Crown} title="You're the commissioner" body="Commissioners who sit out the season don't run a portfolio. Head to Admin to manage the league." />
+      );
       const roster = activeMembership.roster || [];
       const cash = activeMembership.cash || 0;
-      
+      const isOpen = ['ready', 'active'].includes(activeLeague?.status);
       let portfolioValue = cash;
       roster.forEach((i) => {
           const price = liveMarketData[i.id]?.c || 0;
           portfolioValue += (i.shares || 0) * price;
       });
+      const holdingsValue = portfolioValue - cash;
+      const monthReturn = calculateReturn(roster, cash, activeLeague?.startingPrices || {}, activeMembership.startValue);
 
       return (
-          <div className="space-y-6">
-              <div className="bg-gradient-to-r from-emerald-900 to-slate-900 p-6 rounded-2xl border border-emerald-500/30">
-                  <div className="flex justify-between items-end mb-4">
-                      <div><h2 className="text-slate-400 text-sm font-bold uppercase">Portfolio Value</h2><div className="text-4xl font-bold font-mono text-white">${portfolioValue.toLocaleString()}</div></div>
-                  </div>
-                  <div className="bg-slate-800/50 rounded-lg p-3 flex items-center justify-between">
-                      <span className="text-slate-400 text-sm font-bold">Cash on Hand</span>
-                      {['ready', 'active'].includes(activeLeague?.status) ? (
-                          <div className="flex items-center gap-1 text-white font-mono">
-                              $<input type="number" value={cash} onChange={e => updateCash(e.target.value)} className="bg-transparent border-b border-emerald-500 w-24 text-right focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
+          <div className="space-y-4">
+              <div className="surface relative overflow-hidden p-6">
+                  <div className="pointer-events-none absolute -right-16 -top-20 h-52 w-52 rounded-full bg-gold-400/[0.13] blur-3xl" />
+                  <div className="relative">
+                      <div className="eyebrow">Portfolio value</div>
+                      <div className="mt-1 flex items-baseline gap-3">
+                          <span className="font-mono text-4xl font-extrabold tracking-tightest text-white">
+                              ${portfolioValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                          </span>
+                          <Pct value={monthReturn} className="text-sm" />
+                      </div>
+
+                      <div className="mt-5 grid grid-cols-2 gap-2">
+                          <div className="surface-sunken px-3.5 py-3">
+                              <div className="eyebrow">Holdings</div>
+                              <div className="mt-1 font-mono text-sm font-bold text-white">
+                                  ${holdingsValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                              </div>
                           </div>
-                      ) : <span className="text-white font-mono font-bold">${cash}</span>}
+                          <div className="surface-sunken px-3.5 py-3">
+                              <div className="eyebrow">Cash on hand</div>
+                              {isOpen ? (
+                                  <div className="mt-1 flex items-center font-mono text-sm font-bold text-white">
+                                      <span className="text-slate-500">$</span>
+                                      <input
+                                          type="number"
+                                          value={cash}
+                                          onChange={e => updateCash(e.target.value)}
+                                          className="w-full border-b border-gold-400/50 bg-transparent pb-px focus:border-gold-400 focus:outline-none"
+                                      />
+                                  </div>
+                              ) : (
+                                  <div className="mt-1 font-mono text-sm font-bold text-white">${cash.toLocaleString()}</div>
+                              )}
+                          </div>
+                      </div>
                   </div>
               </div>
-              
-              {roster.map((item) => {
+
+              <div className="flex items-center justify-between px-1">
+                  <h3 className="flex items-center gap-2 text-sm font-extrabold uppercase tracking-wide text-white">
+                      <Wallet size={15} className="text-gold-400"/> Holdings
+                  </h3>
+                  <span className="eyebrow">{roster.length} / 30</span>
+              </div>
+
+              {roster.length === 0 ? (
+                  <EmptyState icon={PieChart} title="Nothing drafted yet" body={isOpen ? 'Head to the Market tab and add tickers to build your book.' : 'Your roster is locked until the commissioner opens the month.'}>
+                      {isOpen && <button onClick={() => setCurrentView('market')} className="btn-gold">Browse the market <ArrowRight size={16}/></button>}
+                  </EmptyState>
+              ) : (
+                <div className="space-y-2">
+                {roster.map((item) => {
                   const stock = masterStocks.find(s => s.id === item.id);
                   const price = liveMarketData[item.id]?.c || 0;
                   const val = (item.shares || 0) * price;
-                  
                   return (
-                    <Card key={item.id} className="p-4">
-                        <div className="flex justify-between items-center mb-4">
-                            <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded bg-slate-700 flex items-center justify-center text-xs font-bold text-white">{item.id}</div>
-                                <div>
-                                    <div className="font-bold text-white">{stock?.name || item.id}</div>
-                                    <div className="text-xs text-slate-400">Value: <span className="text-emerald-400 font-bold">${val.toFixed(2)}</span></div>
-                                </div>
+                    <Card key={item.id} className="p-3.5">
+                        <div className="flex items-center gap-3">
+                            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/[0.05] font-mono text-[11px] font-bold text-gold-300 ring-1 ring-white/[0.07]">
+                                {item.id.slice(0, 4)}
                             </div>
-                            {['ready', 'active'].includes(activeLeague?.status) && <button onClick={() => removeFromTeam(item.id)} className="text-rose-500 bg-slate-900 p-2 rounded"><Minus size={16}/></button>}
+                            <div className="min-w-0 flex-1">
+                                <div className="truncate font-bold tracking-tight text-white">{item.id}</div>
+                                <div className="truncate text-xs text-slate-500">{stock?.name || item.id}</div>
+                            </div>
+                            <div className="shrink-0 text-right">
+                                <div className="font-mono text-base font-bold text-white">${val.toFixed(2)}</div>
+                                <div className="font-mono text-[11px] text-slate-500">${price.toFixed(2)} / sh</div>
+                            </div>
+                            {isOpen && (
+                              <button onClick={() => removeFromTeam(item.id)} aria-label={`Remove ${item.id}`}
+                                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/[0.04] text-slate-500 ring-1 ring-white/[0.07] transition hover:bg-rose-500/20 hover:text-rose-300 hover:ring-rose-500/30">
+                                  <Minus size={15}/>
+                              </button>
+                            )}
                         </div>
-                        {['ready', 'active'].includes(activeLeague?.status) ? (
-                            <div className="flex items-center justify-between bg-slate-900 rounded p-2">
-                                <span className="text-xs text-slate-500 font-bold uppercase">Shares</span>
-                                <input 
-                                    type="number" 
-                                    value={item.shares} 
-                                    onChange={(e) => updateShares(item.id, e.target.value)} 
-                                    className="bg-transparent text-right font-mono text-white w-24 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+
+                        <div className="mt-3 flex items-center justify-between rounded-lg bg-black/30 px-3 py-2 ring-1 ring-white/[0.05]">
+                            <span className="eyebrow">{isOpen ? 'Shares' : 'Shares — locked'}</span>
+                            {isOpen ? (
+                                <input
+                                    type="number"
+                                    value={item.shares}
+                                    onChange={(e) => updateShares(item.id, e.target.value)}
+                                    className="w-28 rounded bg-transparent text-right font-mono text-sm font-bold text-white focus:outline-none"
                                     placeholder="0"
                                 />
-                            </div>
-                        ) : (
-                            <div className="flex justify-between text-xs text-slate-500 uppercase font-bold text-center bg-slate-900 py-1 px-2 rounded">
-                                <span>Shares Locked</span>
-                                <span>{item.shares}</span>
-                            </div>
-                        )}
+                            ) : (
+                                <span className="flex items-center gap-1.5 font-mono text-sm font-bold text-slate-400">
+                                    <Lock size={11} className="text-slate-600"/>{item.shares}
+                                </span>
+                            )}
+                        </div>
                     </Card>
                   );
-              })}
+                })}
+                </div>
+              )}
           </div>
       )
   };
 
   const renderMatchups = () => {
-      // Detail View
+      const isLive = activeLeague?.status === 'active';
+      const avatarFor = (uid) => leaguePlayers.find(p => p.userId === uid)?.avatar;
+
       if (selectedMatchup) {
+        const m = selectedMatchup;
+        const isBye = m.p2 === 'BYE';
+        const p1Leads = !isBye && m.p1Score > m.p2Score;
+        const p2Leads = !isBye && m.p2Score > m.p1Score;
+
         return (
-            <div className="space-y-4">
-                <button onClick={() => setSelectedMatchup(null)} className="flex items-center gap-2 text-slate-400 hover:text-white mb-4 transition-colors">
-                    <ChevronLeft size={20} /> Back to Matchups
+            <div className="animate-fade-up space-y-4">
+                <button onClick={() => setSelectedMatchup(null)} className="flex items-center gap-1.5 text-sm font-bold text-slate-500 transition hover:text-white">
+                    <ChevronLeft size={18} /> All matchups
                 </button>
-                <Card className="p-6">
-                    <div className="text-center mb-6">
-                        <div className="text-xs font-bold text-slate-500 uppercase mb-1">Matchup Detail</div>
-                        <h2 className="text-2xl font-bold text-white">{selectedMatchup.type || 'Regular Season'}</h2>
-                        <div className="text-slate-500 text-sm">Month {activeLeague?.month}</div>
+
+                <div className="surface relative overflow-hidden bg-card-glow p-6">
+                    <div className="mb-8 text-center">
+                        <div className="eyebrow text-gold-400/80">{m.type || 'Regular season'}</div>
+                        <h2 className="mt-1 text-2xl font-extrabold tracking-tightest text-white">Month {activeLeague?.month}</h2>
+                        {isLive && (
+                          <span className="chip mt-2 bg-emerald-400/15 text-emerald-300 ring-1 ring-emerald-400/30">
+                            <span className="h-1.5 w-1.5 animate-ticker-pulse rounded-full bg-current" /> Live
+                          </span>
+                        )}
                     </div>
-                    
-                    <div className="flex justify-between items-center mb-8 relative">
-                         <div className="absolute left-1/2 top-0 bottom-0 w-px bg-slate-700/50 -translate-x-1/2"></div>
-                        
-                        <div className="text-center w-5/12 z-10">
-                            <Avatar name={selectedMatchup.p1Name} size="lg" className="mx-auto mb-3" />
-                            <div className="text-xl font-bold text-white mb-1">{selectedMatchup.p1Name}</div>
-                            <div className={`text-4xl font-mono font-bold ${selectedMatchup.p1Score >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                {selectedMatchup.p1Score}%
+
+                    <div className="relative flex items-start justify-between">
+                        <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-gradient-to-b from-transparent via-white/10 to-transparent" />
+
+                        <div className="z-10 w-5/12 text-center">
+                            <Avatar url={avatarFor(m.p1)} name={m.p1Name} size="lg" className={`mx-auto mb-3 ${p1Leads ? 'ring-gold-400/70' : ''}`} />
+                            <div className="mb-2 truncate text-base font-bold text-white">{m.p1Name}</div>
+                            <div className={`font-mono text-4xl font-extrabold tracking-tightest ${m.p1Score >= 0 ? 'text-gain' : 'text-loss'}`}>
+                                {m.p1Score > 0 ? '+' : ''}{m.p1Score}%
                             </div>
-                        </div>
-                        
-                        <div className="text-center w-2/12 z-10">
-                            <div className="bg-slate-900 rounded-full w-10 h-10 flex items-center justify-center mx-auto border-2 border-slate-700 text-slate-400 font-bold text-xs">VS</div>
+                            {p1Leads && <div className="eyebrow mt-2 text-gold-400">Leading</div>}
                         </div>
 
-                        <div className="text-center w-5/12 z-10">
-                            <Avatar name={selectedMatchup.p2Name} size="lg" className="mx-auto mb-3" />
-                            <div className="text-xl font-bold text-white mb-1">{selectedMatchup.p2Name}</div>
-                            {selectedMatchup.p2 !== 'BYE' ? (
-                                <div className={`text-4xl font-mono font-bold ${selectedMatchup.p2Score >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                    {selectedMatchup.p2Score}%
+                        <div className="z-10 w-2/12 pt-5 text-center">
+                            <div className="mx-auto flex h-11 w-11 rotate-45 items-center justify-center rounded-xl bg-ink-900 ring-1 ring-white/10">
+                                <span className="-rotate-45 font-mono text-[11px] font-bold text-slate-500">VS</span>
+                            </div>
+                        </div>
+
+                        <div className="z-10 w-5/12 text-center">
+                            <Avatar url={avatarFor(m.p2)} name={m.p2Name} size="lg" className={`mx-auto mb-3 ${p2Leads ? 'ring-gold-400/70' : ''}`} />
+                            <div className="mb-2 truncate text-base font-bold text-white">{m.p2Name}</div>
+                            {!isBye ? (
+                                <div className={`font-mono text-4xl font-extrabold tracking-tightest ${m.p2Score >= 0 ? 'text-gain' : 'text-loss'}`}>
+                                    {m.p2Score > 0 ? '+' : ''}{m.p2Score}%
                                 </div>
                             ) : (
-                                <div className="text-slate-500 font-mono italic">--</div>
+                                <div className="font-mono text-4xl font-extrabold text-slate-700">—</div>
                             )}
+                            {p2Leads && <div className="eyebrow mt-2 text-gold-400">Leading</div>}
                         </div>
                     </div>
-                </Card>
+                </div>
             </div>
         );
       }
 
-      // List View
       return (
-        <div className="space-y-4">
-            <h2 className="text-lg font-bold text-white mb-4">Month {activeLeague?.month} Head-to-Head</h2>
-            {!activeLeague?.matchups?.length && <div className="text-slate-500">No matchups generated yet.</div>}
-            
-            {activeLeague?.matchups?.map((m, i) => {
+        <div className="space-y-3">
+            <SectionHeading icon={Swords} title={`Month ${activeLeague?.month ?? '—'}`} meta={isLive ? 'Live scoring' : 'Head to head'} />
+
+            {!activeLeague?.matchups?.length ? (
+                <EmptyState icon={Swords} title="No matchups yet" body="The commissioner hasn't generated the schedule for this month." />
+            ) : activeLeague.matchups.map((m, i) => {
                 let p1LiveScore = m.p1Score;
                 let p2LiveScore = m.p2Score;
-
-                if (activeLeague.status === 'active') {
+                if (isLive) {
                     const p1 = leaguePlayers.find(p => p.userId === m.p1);
                     const p2 = leaguePlayers.find(p => p.userId === m.p2);
                     const basePrices = activeLeague.startingPrices || {};
                     p1LiveScore = parseFloat(calculateReturn(p1?.roster, p1?.cash, basePrices, p1?.startValue).toFixed(2));
                     p2LiveScore = m.p2 === 'BYE' ? 0 : parseFloat(calculateReturn(p2?.roster, p2?.cash, basePrices, p2?.startValue).toFixed(2));
                 }
+                const isBye = m.p2 === 'BYE';
+                const p1Leads = !isBye && p1LiveScore > p2LiveScore;
+                const p2Leads = !isBye && p2LiveScore > p1LiveScore;
+                const mine = m.p1 === user?.uid || m.p2 === user?.uid;
 
                 return (
-                    <Card key={i} className="p-4 cursor-pointer hover:bg-slate-700/50 transition-colors" onClick={() => setSelectedMatchup({...m, p1Score: p1LiveScore, p2Score: p2LiveScore})}>
-                        <div className="flex justify-between items-center text-sm">
-                            <div className="text-center w-1/3">
-                                <div className="font-bold text-slate-200">{m.p1Name}</div>
-                                <div className={`font-mono font-bold ${p1LiveScore>=0?'text-emerald-400':'text-rose-400'}`}>{p1LiveScore}%</div>
+                    <Card key={i} className={`p-4 ${mine ? 'ring-gold-400/25' : ''}`} onClick={() => setSelectedMatchup({...m, p1Score: p1LiveScore, p2Score: p2LiveScore})}>
+                        {m.type && (
+                            <div className="mb-3 flex items-center justify-center gap-2">
+                                <span className="h-px flex-1 hairline" />
+                                <span className="eyebrow text-gold-400/90">{m.type}</span>
+                                <span className="h-px flex-1 hairline" />
                             </div>
-                            <div className="text-center">
-                                <div className="text-slate-600 font-bold text-xs">VS</div>
-                                {m.type && <div className="text-[10px] text-amber-500 font-bold uppercase mt-1">{m.type}</div>}
+                        )}
+                        <div className="flex items-center gap-2">
+                            <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                                <Avatar url={avatarFor(m.p1)} name={m.p1Name} size="sm" className={p1Leads ? 'ring-gold-400/60' : ''} />
+                                <div className="min-w-0">
+                                    <div className={`truncate text-sm font-bold ${p1Leads ? 'text-white' : 'text-slate-300'}`}>{m.p1Name}</div>
+                                    <Pct value={p1LiveScore} className="text-sm" />
+                                </div>
                             </div>
-                            <div className="text-center w-1/3">
-                                <div className="font-bold text-slate-200">{m.p2Name}</div>
-                                <div className={`font-mono font-bold ${p2LiveScore>=0?'text-emerald-400':'text-rose-400'}`}>{p2LiveScore}%</div>
+
+                            <span className="shrink-0 px-2 font-mono text-[10px] font-bold text-slate-600">VS</span>
+
+                            <div className="flex min-w-0 flex-1 items-center justify-end gap-2.5 text-right">
+                                <div className="min-w-0">
+                                    <div className={`truncate text-sm font-bold ${p2Leads ? 'text-white' : 'text-slate-300'}`}>{m.p2Name}</div>
+                                    {isBye ? <span className="font-mono text-sm font-bold text-slate-600">—</span> : <Pct value={p2LiveScore} className="text-sm" />}
+                                </div>
+                                <Avatar url={avatarFor(m.p2)} name={m.p2Name} size="sm" className={p2Leads ? 'ring-gold-400/60' : ''} />
                             </div>
                         </div>
                     </Card>
@@ -959,234 +1311,254 @@ export default function FiveStarApp() {
   };
 
   const renderAdmin = () => (
-      <div className="space-y-6">
-          <div className="bg-slate-800 border-t-4 border-emerald-500 rounded-xl p-4">
-             <h3 className="font-bold text-white mb-2 flex items-center gap-2"><Settings size={18}/> League Info</h3>
-             <div className="p-3 bg-slate-900 rounded mb-4 flex justify-between items-center">
-                 <div><div className="text-[10px] uppercase text-slate-500 font-bold">Invite Code</div><div className="text-xl font-mono text-white tracking-widest">{activeMembership?.leagueId}</div></div>
-                 <button onClick={()=>{navigator.clipboard.writeText(activeMembership.leagueId);alert("Copied")}}><Copy className="text-slate-400"/></button>
-             </div>
-             <input value={newLeagueNameSetting} onChange={e=>setNewLeagueNameSetting(e.target.value)} className="w-full bg-slate-900 border-slate-700 text-white px-3 py-2 rounded mb-2" />
-             <button onClick={() => updateDoc(doc(db,'artifacts', appId, 'public', 'data', 'leagues',activeMembership.leagueId), {name:newLeagueNameSetting})} className="bg-emerald-600 text-white font-bold w-full py-2 rounded">Save Name</button>
-          </div>
+      <div className="space-y-4">
+          <SectionHeading icon={Shield} title="Commissioner" meta={STATUS_META[activeLeague?.status]?.label} />
 
-          <div className="bg-slate-800 border-t-4 border-cyan-500 rounded-xl p-4">
-              <h3 className="font-bold text-white mb-4 flex items-center gap-2"><DollarSign size={18}/> Player Starting Values (Month Start)</h3>
-              <div className="space-y-2 max-h-60 overflow-y-auto">
+          <Panel icon={Crown} title="Season controls" accent="gold" description="Move the league through the month: open trading, lock it, then score it.">
+             <div className="grid gap-2">
+                {activeLeague?.status === 'drafting' && <button onClick={startLeague} className="btn-gold w-full py-3"><PlayCircle size={16}/> Start league &amp; generate schedule</button>}
+                {activeLeague?.status?.includes('ready') && <button onClick={startMonth} className="btn-gold w-full py-3"><PlayCircle size={16}/> Start month {activeLeague.month}</button>}
+                {activeLeague?.status === 'active' && <button onClick={endMonth} className="btn-gold w-full py-3"><Lock size={16}/> End month &amp; score matchups</button>}
+                {activeLeague?.status === 'completed' && <button onClick={nextMonth} className="btn-ghost w-full py-3"><ArrowRight size={16}/> Advance to next month</button>}
+                {activeLeague?.status === 'active' && <button onClick={resetToDraft} className="btn-ghost w-full"><RotateCcw size={14}/> Reset current month</button>}
+             </div>
+          </Panel>
+
+          <Panel icon={Settings} title="League info" accent="cyan">
+             <div className="surface-sunken mb-3 flex items-center justify-between px-4 py-3">
+                 <div>
+                     <div className="eyebrow">Invite code</div>
+                     <div className="font-mono text-2xl font-bold tracking-[0.25em] text-gold-300">{activeMembership?.leagueId}</div>
+                 </div>
+                 <button onClick={()=>{navigator.clipboard.writeText(activeMembership.leagueId);alert("Copied");}} aria-label="Copy invite code"
+                    className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/[0.06] text-slate-400 ring-1 ring-white/10 transition hover:text-white">
+                     <Copy size={16}/>
+                 </button>
+             </div>
+             <div className="flex gap-2">
+                 <input value={newLeagueNameSetting} onChange={e=>setNewLeagueNameSetting(e.target.value)} className="field-sm flex-1 py-2.5" placeholder="League name" />
+                 <button onClick={() => updateDoc(doc(db,'artifacts', appId, 'public', 'data', 'leagues',activeMembership.leagueId), {name:newLeagueNameSetting})} className="btn-ghost px-4"><Save size={14}/> Save</button>
+             </div>
+          </Panel>
+
+          <Panel icon={CircleDollarSign} title="Starting values" accent="cyan"
+            description="Each player's total portfolio value at the start of the month — this is the denominator for their % return.">
+              <div className="max-h-60 space-y-1.5 overflow-y-auto pr-1">
                   {leaguePlayers.filter(p => p.isPlayer).map(p => (
-                      <div key={p.id} className="flex items-center justify-between bg-slate-900 p-2 rounded">
-                          <div className="text-sm font-bold text-white">{p.name}</div>
-                          <div className="flex items-center gap-2">
-                              <span className="text-xs text-slate-500">$</span>
-                              <input 
-                                  type="number" 
-                                  defaultValue={p.startValue} 
+                      <div key={p.id} className="surface-sunken flex items-center justify-between px-3 py-2">
+                          <div className="truncate text-sm font-bold text-white">{p.name}</div>
+                          <div className="flex items-center gap-1">
+                              <span className="font-mono text-xs text-slate-500">$</span>
+                              <input
+                                  type="number"
+                                  defaultValue={p.startValue}
                                   onBlur={(e) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'league_players', p.id), { startValue: parseFloat(e.target.value) })}
-                                  className="w-24 bg-slate-800 border border-slate-700 text-white px-2 py-1 rounded text-right text-sm"
-                                  placeholder="Start Value"
+                                  className="field-sm w-28 py-1.5 text-right font-mono"
+                                  placeholder="0"
                               />
                           </div>
                       </div>
                   ))}
               </div>
-              <p className="text-xs text-slate-500 mt-2">Enter the total portfolio value for each player at the beginning of the month. This is used to calculate the % return.</p>
-          </div>
+          </Panel>
 
-          <div className="bg-slate-800 border-t-4 border-orange-500 rounded-xl p-4">
-              <h3 className="font-bold text-white mb-4 flex items-center gap-2"><Trophy size={18}/> Edit Player Records</h3>
-              <div className="space-y-2 max-h-60 overflow-y-auto">
+          <Panel icon={Trophy} title="Player records" accent="orange">
+              <div className="max-h-60 space-y-1.5 overflow-y-auto pr-1">
                   {leaguePlayers.filter(p => p.isPlayer).map(p => (
-                      <div key={p.id} className="flex items-center justify-between bg-slate-900 p-2 rounded">
-                          <div className="text-sm font-bold text-white w-1/3 truncate">{p.name}</div>
+                      <div key={p.id} className="surface-sunken flex items-center justify-between gap-2 px-3 py-2">
+                          <div className="min-w-0 flex-1 truncate text-sm font-bold text-white">{p.name}</div>
                           <div className="flex items-center gap-2">
-                              <div className="flex flex-col items-center">
-                                  <span className="text-[8px] text-slate-500 uppercase">Wins</span>
-                                  <input
-                                      type="number"
-                                      defaultValue={p.wins}
-                                      onBlur={(e) => handleUpdatePlayerStats(p.id, 'wins', e.target.value)}
-                                      className="w-12 bg-slate-800 border border-slate-700 text-white px-1 rounded text-center text-xs"
-                                  />
-                              </div>
-                              <div className="flex flex-col items-center">
-                                  <span className="text-[8px] text-slate-500 uppercase">Losses</span>
-                                  <input
-                                      type="number"
-                                      defaultValue={p.losses}
-                                      onBlur={(e) => handleUpdatePlayerStats(p.id, 'losses', e.target.value)}
-                                      className="w-12 bg-slate-800 border border-slate-700 text-white px-1 rounded text-center text-xs"
-                                  />
-                              </div>
+                              <label className="flex items-center gap-1.5">
+                                  <span className="eyebrow">W</span>
+                                  <input type="number" defaultValue={p.wins} onBlur={(e) => handleUpdatePlayerStats(p.id, 'wins', e.target.value)} className="field-sm w-14 py-1.5 text-center font-mono" />
+                              </label>
+                              <label className="flex items-center gap-1.5">
+                                  <span className="eyebrow">L</span>
+                                  <input type="number" defaultValue={p.losses} onBlur={(e) => handleUpdatePlayerStats(p.id, 'losses', e.target.value)} className="field-sm w-14 py-1.5 text-center font-mono" />
+                              </label>
                           </div>
                       </div>
                   ))}
               </div>
-          </div>
+          </Panel>
 
-          <div className="bg-slate-800 border-t-4 border-pink-500 rounded-xl p-4">
-            <h3 className="font-bold text-white mb-4 flex items-center gap-2"><Swords size={18}/> Edit Current Matchups</h3>
-            <div className="space-y-2 mb-4">
+          <Panel icon={Swords} title="Current matchups" accent="pink">
+            <div className="mb-3 space-y-1.5">
                 {activeLeague?.matchups?.map((m, i) => (
-                    <div key={i} className="flex flex-col gap-2 bg-slate-900 p-2 rounded">
-                        <div className="flex items-center gap-2">
-                            <select 
-                                value={m.p1}
-                                onChange={(e) => handleUpdateMatchup(i, 'p1', e.target.value)}
-                                className="bg-slate-800 border border-slate-700 text-white text-xs rounded p-1 flex-1"
-                            >
-                                <option value="BYE">BYE</option>
-                                {leaguePlayers.map(p => <option key={p.userId} value={p.userId}>{p.name}</option>)}
-                            </select>
-                            <span className="text-slate-500 text-xs font-bold">VS</span>
-                            <select 
-                                value={m.p2}
-                                onChange={(e) => handleUpdateMatchup(i, 'p2', e.target.value)}
-                                className="bg-slate-800 border border-slate-700 text-white text-xs rounded p-1 flex-1"
-                            >
-                                <option value="BYE">BYE</option>
-                                {leaguePlayers.map(p => <option key={p.userId} value={p.userId}>{p.name}</option>)}
-                            </select>
-                            <button onClick={() => handleDeleteMatchup(i)} className="text-rose-500 hover:text-rose-400 p-1"><Trash2 size={14}/></button>
-                        </div>
+                    <div key={i} className="surface-sunken flex items-center gap-2 p-2">
+                        <select value={m.p1} onChange={(e) => handleUpdateMatchup(i, 'p1', e.target.value)} className="field-sm min-w-0 flex-1 py-1.5">
+                            <option value="BYE">BYE</option>
+                            {leaguePlayers.map(p => <option key={p.userId} value={p.userId}>{p.name}</option>)}
+                        </select>
+                        <span className="shrink-0 font-mono text-[10px] font-bold text-slate-600">VS</span>
+                        <select value={m.p2} onChange={(e) => handleUpdateMatchup(i, 'p2', e.target.value)} className="field-sm min-w-0 flex-1 py-1.5">
+                            <option value="BYE">BYE</option>
+                            {leaguePlayers.map(p => <option key={p.userId} value={p.userId}>{p.name}</option>)}
+                        </select>
+                        <button onClick={() => handleDeleteMatchup(i)} aria-label="Delete matchup" className="shrink-0 p-1 text-slate-600 transition hover:text-rose-400"><Trash2 size={14}/></button>
                     </div>
                 ))}
             </div>
-            <button onClick={handleAddMatchup} className="w-full bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded flex items-center justify-center gap-2 text-sm font-bold">
-                <Plus size={14}/> Add New Matchup
-            </button>
-          </div>
+            <button onClick={handleAddMatchup} className="btn-ghost w-full"><Plus size={14}/> Add matchup</button>
+          </Panel>
 
-          <div className="bg-slate-800 border-t-4 border-purple-500 rounded-xl p-4">
-              <h3 className="font-bold text-white mb-4 flex items-center gap-2"><Calendar size={18}/> Season Schedule</h3>
-              <div className="max-h-60 overflow-y-auto space-y-4">
+          <Panel icon={Calendar} title="Season schedule" accent="purple">
+              <div className="max-h-64 space-y-4 overflow-y-auto pr-1">
                   {[4,5,6,7,8,9,10,11].map(m => {
                       const mMatchups = activeLeague?.schedule?.[m];
                       if (!mMatchups) return null;
                       return (
                           <div key={m}>
-                              <div className="text-xs font-bold text-slate-500 uppercase mb-1">Month {m}</div>
-                              <div className="grid grid-cols-2 gap-2 text-xs text-slate-300">
+                              <div className="eyebrow mb-1.5">Month {m}</div>
+                              <div className="grid gap-1.5 sm:grid-cols-2">
                                   {mMatchups.map((match, i) => (
-                                      <div key={i} className="bg-slate-900 p-2 rounded">{match.p1Name} vs {match.p2Name}</div>
+                                    <div key={i} className="surface-sunken truncate px-2.5 py-1.5 text-xs text-slate-400">
+                                      <span className="text-slate-200">{match.p1Name}</span> vs <span className="text-slate-200">{match.p2Name}</span>
+                                    </div>
                                   ))}
                               </div>
                           </div>
                       );
                   })}
-                  <div className="pt-2 border-t border-slate-700">
-                      <div className="text-xs font-bold text-amber-500 uppercase mb-1">Month 12 (Playoffs)</div>
-                      <div className="text-xs text-slate-400">Matchups are determined by standings at end of month 11.</div>
+                  <div className="border-t border-white/[0.07] pt-3">
+                      <div className="eyebrow mb-1 text-gold-400">Month 12 — Playoffs</div>
+                      <p className="text-xs text-slate-500">Seeded automatically from the standings at the end of month 11.</p>
                   </div>
               </div>
-          </div>
+          </Panel>
 
-          <div className="bg-slate-800 border-t-4 border-blue-500 rounded-xl p-4">
-             <h3 className="font-bold text-white mb-4 flex items-center gap-2"><Search size={18}/> Manage Stock Pool</h3>
-             <div className="flex gap-2 mb-4">
-                 <input placeholder="Add Ticker (e.g. KO)" value={newStockTicker} onChange={e=>setNewStockTicker(e.target.value)} className="flex-1 bg-slate-900 border-slate-700 text-white px-3 py-2 rounded uppercase" />
-                 <button onClick={addNewStock} disabled={isProcessing} className="bg-blue-600 text-white font-bold px-4 rounded">{isProcessing?'...':'Add'}</button>
+          <Panel icon={BarChart3} title="Stock pool" accent="blue" description="Tickers available to every team in this league.">
+             <div className="mb-3 flex gap-2">
+                 <input placeholder="Add ticker (e.g. KO)" value={newStockTicker} onChange={e=>setNewStockTicker(e.target.value)} className="field-sm flex-1 py-2.5 uppercase" />
+                 <button onClick={addNewStock} disabled={isProcessing} className="btn-ghost px-4">{isProcessing ? <RefreshCw size={14} className="animate-spin"/> : <Plus size={14}/>} Add</button>
              </div>
-             <div className="max-h-60 overflow-y-auto space-y-1">
-                 {masterStocks.map(s => {
-                     return (
-                         <div key={s.id} className="flex justify-between items-center bg-slate-900 p-2 rounded">
-                             <div className="text-sm font-bold text-white">{s.id}</div>
-                             <div className="flex gap-2">
-                                 <button onClick={() => deleteStock(s.id)} className="text-slate-600 hover:text-rose-500"><Trash2 size={14}/></button>
-                             </div>
+             <div className="max-h-60 space-y-1 overflow-y-auto pr-1">
+                 {masterStocks.map(s => (
+                     <div key={s.id} className="surface-sunken flex items-center justify-between px-3 py-2">
+                         <div className="min-w-0">
+                            <span className="font-mono text-sm font-bold text-white">{s.id}</span>
+                            <span className="ml-2 truncate text-xs text-slate-500">{s.name}</span>
                          </div>
-                     )
-                 })}
+                         <button onClick={() => deleteStock(s.id)} aria-label={`Delete ${s.id}`} className="shrink-0 text-slate-600 transition hover:text-rose-400"><Trash2 size={14}/></button>
+                     </div>
+                 ))}
              </div>
-          </div>
+          </Panel>
 
-          <div className="bg-slate-800 border-t-4 border-amber-500 rounded-xl p-4 grid gap-3">
-             <h3 className="font-bold text-amber-500"><Crown size={18} className="inline mr-2"/> Controls</h3>
-             {activeLeague?.status==='drafting' && <button onClick={startLeague} className="bg-emerald-600 text-white font-bold py-3 rounded">Start League (Gen Schedule)</button>}
-             {activeLeague?.status?.includes('ready') && <button onClick={startMonth} className="bg-emerald-600 text-white font-bold py-3 rounded">Start Month {activeLeague.month}</button>}
-             {activeLeague?.status==='active' && <button onClick={endMonth} className="bg-emerald-600 text-white font-bold py-3 rounded">End Month</button>}
-             {activeLeague?.status==='completed' && <button onClick={nextMonth} className="bg-slate-600 text-white font-bold py-3 rounded">Next Month</button>}
-          </div>
-
-          <div className="bg-slate-800 border-t-4 border-rose-500 rounded-xl p-4">
-             <h3 className="font-bold text-rose-500 mb-4 flex items-center gap-2"><Trash2 size={18}/> Danger Zone</h3>
-             <p className="text-slate-400 text-sm mb-4">Deleting a league cannot be undone. All data will be lost.</p>
-             <button onClick={handleDeleteLeague} disabled={isProcessing} className="w-full bg-rose-600 hover:bg-rose-700 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2">
-                 {isProcessing ? 'Deleting...' : 'Delete League'}
+          <Panel icon={Trash2} title="Danger zone" accent="rose" description="Deleting a league removes every roster, matchup and record in it. This cannot be undone.">
+             <button onClick={handleDeleteLeague} disabled={isProcessing} className="btn-danger w-full py-3">
+                {isProcessing ? 'Deleting…' : <><Trash2 size={15}/> Delete league</>}
              </button>
-          </div>
+          </Panel>
       </div>
   );
 
+  const navItems = [
+    { key: 'dashboard', label: 'League',   icon: Trophy },
+    { key: 'team',      label: 'Team',     icon: Users },
+    { key: 'matchups',  label: 'Matchups', icon: Swords },
+    { key: 'market',    label: 'Market',   icon: BarChart3 },
+    ...(activeMembership?.isAdmin ? [{ key: 'admin', label: 'Admin', icon: Settings }] : []),
+  ];
+
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-200 pb-24 relative">
-      <header className="sticky top-0 z-20 bg-slate-950/80 backdrop-blur-md border-b border-slate-800 px-4 py-3 flex justify-between items-center">
-        <div className="flex items-center gap-2">
-          <img src={LOGO_URL} alt="Logo" className="w-8 h-8 object-contain rounded bg-slate-900" onError={(e) => {e.target.onerror=null; e.target.src="https://placehold.co/100x100/10b981/ffffff?text=5Star"}} />
-          <div>
-            <div className="font-bold text-white leading-none">{activeLeague?.name || "FiveStar"}</div>
-            <div className="text-xs text-slate-500">{activeMembership?.name || 'Loading...'} {activeMembership?.isAdmin && '(Admin)'}</div>
+    <div className="relative min-h-screen pb-28">
+      <header ref={headerRef} className="sticky top-0 z-20 border-b border-white/[0.07] bg-ink-950/80 px-4 py-2.5 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-2xl items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <div className="rounded-xl bg-gold-sheen p-[1.5px]">
+              <img src={LOGO_URL} alt="FiveStar" className="h-8 w-8 rounded-[10px] bg-ink-950 object-contain p-1" onError={logoFallback} />
+            </div>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-extrabold leading-tight tracking-tight text-white">{activeLeague?.name || "FiveStar"}</div>
+              <div className="flex items-center gap-1.5 truncate text-xs leading-tight text-slate-500">
+                {activeMembership?.name || 'No league selected'}
+                {activeMembership?.isAdmin && <Crown size={11} className="shrink-0 text-gold-400"/>}
+              </div>
+            </div>
           </div>
-        </div>
-        <div className="flex items-center gap-2">
-            {activeMembership && <button onClick={() => { setEditingName(activeMembership?.name || ''); setEditingAvatar(''); setShowProfile(true); }} className="text-slate-500 hover:text-white p-2"><User size={20}/></button>}
-            <button onClick={() => { signOut(auth); setMemberships([]); setActiveMembership(null); }} className="text-slate-500 hover:text-white p-2"><LogOut size={20} /></button>
+          <div className="flex shrink-0 items-center gap-1">
+              {activeMembership && (
+                <button onClick={() => { setEditingName(activeMembership?.name || ''); setEditingAvatar(''); setShowProfile(true); }} aria-label="Edit profile"
+                  className="rounded-lg p-2 text-slate-500 transition hover:bg-white/[0.06] hover:text-white"><User size={18}/></button>
+              )}
+              <button onClick={() => { signOut(auth); setMemberships([]); setActiveMembership(null); }} aria-label="Sign out"
+                className="rounded-lg p-2 text-slate-500 transition hover:bg-white/[0.06] hover:text-white"><LogOut size={18} /></button>
+          </div>
         </div>
       </header>
 
-      {/* Avatar Overlay */}
       {enlargedAvatar && (
-          <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-4" onClick={() => setEnlargedAvatar(null)}>
-              <div className="relative max-w-sm w-full text-center" onClick={(e) => e.stopPropagation()}>
-                  <button onClick={() => setEnlargedAvatar(null)} className="absolute -top-10 right-0 text-slate-400 hover:text-white"><X size={24}/></button>
-                  <img src={enlargedAvatar.url} alt={enlargedAvatar.name} className="w-full aspect-square rounded-2xl object-cover shadow-2xl border-2 border-emerald-500 mb-4" />
-                  <div className="text-2xl font-bold text-white">{enlargedAvatar.name}</div>
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 p-4 backdrop-blur-sm" onClick={() => setEnlargedAvatar(null)}>
+              <div className="relative w-full max-w-sm animate-fade-up text-center" onClick={(e) => e.stopPropagation()}>
+                  <button onClick={() => setEnlargedAvatar(null)} aria-label="Close" className="absolute -top-11 right-0 text-slate-500 transition hover:text-white"><X size={22}/></button>
+                  {enlargedAvatar.url ? (
+                    <img src={enlargedAvatar.url} alt={enlargedAvatar.name} className="mb-4 aspect-square w-full rounded-3xl object-cover shadow-lift ring-1 ring-white/10" />
+                  ) : (
+                    <div className="mb-4 flex aspect-square w-full items-center justify-center rounded-3xl bg-ink-800 text-7xl font-extrabold uppercase text-slate-600 ring-1 ring-white/10">
+                      {enlargedAvatar.name?.charAt(0) || '?'}
+                    </div>
+                  )}
+                  <div className="text-2xl font-extrabold tracking-tightest text-white">{enlargedAvatar.name}</div>
               </div>
           </div>
       )}
 
-      {/* Profile Modal */}
       {showProfile && (
-          <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
-              <div className="bg-slate-900 border border-slate-800 p-6 rounded-xl w-full max-w-sm">
-                  <h3 className="text-white font-bold text-lg mb-4">Edit Profile</h3>
-                  <div className="flex justify-center mb-4">
-                      <Avatar url={editingAvatar || activeMembership.avatar} name={editingName} size="lg" />
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+              <div className="surface w-full max-w-sm animate-fade-up p-6 shadow-lift">
+                  <div className="mb-5 flex items-center justify-between">
+                      <h3 className="text-lg font-extrabold tracking-tightest text-white">Edit profile</h3>
+                      <button onClick={() => setShowProfile(false)} aria-label="Close" className="text-slate-500 transition hover:text-white"><X size={20}/></button>
                   </div>
-                  <label className="block text-xs uppercase text-slate-500 font-bold mb-1">Display Name</label>
-                  <input value={editingName} onChange={e => setEditingName(e.target.value)} className="w-full bg-slate-800 border border-slate-700 text-white px-3 py-2 rounded-lg mb-4" placeholder="Display Name" />
-                  
-                  <label className="block text-xs uppercase text-slate-500 font-bold mb-1">Profile Picture</label>
-                  <div className="flex items-center gap-2 mb-6">
-                      <label className="flex-1 bg-slate-800 border border-slate-700 text-slate-300 px-3 py-2 rounded-lg cursor-pointer flex items-center justify-center gap-2 hover:bg-slate-700">
-                          <Upload size={16}/> Upload Image
-                          <input type="file" accept="image/*" onChange={handleFileChange} className="hidden" />
-                      </label>
+
+                  <div className="mb-6 flex justify-center">
+                      <Avatar url={editingAvatar || activeMembership?.avatar} name={editingName} size="xl" />
                   </div>
+
+                  <label className="eyebrow mb-1.5 block">Display name</label>
+                  <input value={editingName} onChange={e => setEditingName(e.target.value)} className="field mb-4" placeholder="Display name" />
+
+                  <label className="eyebrow mb-1.5 block">Profile picture</label>
+                  <label className="btn-ghost mb-6 w-full cursor-pointer">
+                      <Upload size={15}/> Upload image
+                      <input type="file" accept="image/*" onChange={handleFileChange} className="hidden" />
+                  </label>
 
                   <div className="flex gap-2">
-                      <button onClick={handleUpdateProfile} className="flex-1 bg-emerald-600 text-white font-bold py-2 rounded-lg">Save</button>
-                      <button onClick={() => setShowProfile(false)} className="flex-1 bg-slate-800 text-slate-400 font-bold py-2 rounded-lg">Cancel</button>
+                      <button onClick={handleUpdateProfile} className="btn-gold flex-1">Save changes</button>
+                      <button onClick={() => setShowProfile(false)} className="btn-ghost flex-1">Cancel</button>
                   </div>
               </div>
           </div>
       )}
 
-      <main className="p-4 max-w-2xl mx-auto">
+      <main className="mx-auto max-w-2xl p-4">
          {currentView === 'dashboard' && renderLeagueHub()}
          {activeMembership && currentView === 'market' && renderMarket()}
          {activeMembership && currentView === 'team' && renderTeam()}
-         {activeMembership && currentView === 'matchups' && (selectedMatchup ? renderMatchups() : renderMatchups())} 
+         {activeMembership && currentView === 'matchups' && renderMatchups()}
          {activeMembership?.isAdmin && currentView === 'admin' && renderAdmin()}
       </main>
 
-      <nav className="fixed bottom-0 left-0 right-0 bg-slate-900 border-t border-slate-800 pb-safe pt-2 px-6">
-        <div className="flex justify-between items-center max-w-lg mx-auto h-16">
-          <button onClick={() => setCurrentView('dashboard')} className={`flex flex-col items-center gap-1 ${currentView === 'dashboard' ? 'text-emerald-400' : 'text-slate-600'}`}><Trophy size={24} /><span className="text-[10px] font-medium">League</span></button>
-          <button onClick={() => setCurrentView('team')} className={`flex flex-col items-center gap-1 ${currentView === 'team' ? 'text-emerald-400' : 'text-slate-600'}`} disabled={!activeMembership}><Users size={24} /><span className="text-[10px] font-medium">Team</span></button>
-          <button onClick={() => { setCurrentView('matchups'); setSelectedMatchup(null); }} className={`flex flex-col items-center gap-1 ${currentView === 'matchups' ? 'text-emerald-400' : 'text-slate-600'}`} disabled={!activeMembership}><Swords size={24} /><span className="text-[10px] font-medium">Matchups</span></button>
-          <button onClick={() => setCurrentView('market')} className={`flex flex-col items-center gap-1 ${currentView === 'market' ? 'text-emerald-400' : 'text-slate-600'}`} disabled={!activeMembership}><BarChart3 size={24} /><span className="text-[10px] font-medium">Market</span></button>
-          {activeMembership?.isAdmin && <button onClick={() => setCurrentView('admin')} className={`flex flex-col items-center gap-1 ${currentView === 'admin' ? 'text-emerald-400' : 'text-slate-600'}`}><Settings size={24} /><span className="text-[10px] font-medium">Admin</span></button>}
+      <nav className="pb-safe fixed inset-x-0 bottom-0 z-30 border-t border-white/[0.07] bg-ink-950/85 backdrop-blur-xl">
+        <div className="mx-auto flex h-[68px] max-w-lg items-stretch justify-between px-3">
+          {navItems.map((item) => {
+            const active = currentView === item.key;
+            const disabled = item.key !== 'dashboard' && !activeMembership;
+            return (
+              <button
+                key={item.key}
+                disabled={disabled}
+                onClick={() => { setCurrentView(item.key); if (item.key === 'matchups') setSelectedMatchup(null); }}
+                className={`group relative flex flex-1 flex-col items-center justify-center gap-1 transition disabled:opacity-30 ${active ? 'text-gold-300' : 'text-slate-600 hover:text-slate-400'}`}
+              >
+                <span className={`absolute top-0 h-[2px] w-8 rounded-full bg-gold-sheen transition-opacity ${active ? 'opacity-100' : 'opacity-0'}`} />
+                <item.icon size={21} strokeWidth={active ? 2.4 : 2} />
+                <span className="text-[10px] font-bold tracking-tight">{item.label}</span>
+              </button>
+            );
+          })}
         </div>
       </nav>
     </div>

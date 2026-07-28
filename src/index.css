@@ -1,3 +1,123 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-ink-950 text-slate-200 font-sans antialiased;
+    background-image: theme('backgroundImage.page-glow');
+    background-attachment: fixed;
+    background-repeat: no-repeat;
+  }
+
+  /* Every figure in the app is tabular so columns of numbers line up. */
+  .font-mono,
+  input[type='number'] {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::selection {
+    @apply bg-gold-400/25 text-white;
+  }
+
+  *:focus-visible {
+    @apply outline-none ring-2 ring-gold-400/60 ring-offset-2 ring-offset-ink-950;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-white/10;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-white/20;
+  }
+
+  /* Hide number spinners — share/cash inputs are typed, not stepped. */
+  input[type='number']::-webkit-outer-spin-button,
+  input[type='number']::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type='number'] {
+    -moz-appearance: textfield;
+  }
+}
+
+@layer components {
+  /* --- Surfaces --- */
+  .surface {
+    @apply rounded-2xl bg-ink-850/70 ring-1 ring-white/[0.07] shadow-card backdrop-blur-sm;
+  }
+  .surface-sunken {
+    @apply rounded-xl bg-black/30 ring-1 ring-white/[0.05];
+  }
+  .hairline {
+    @apply bg-white/[0.07];
+  }
+
+  /* --- Labels --- */
+  .eyebrow {
+    @apply text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500;
+  }
+
+  /* --- Buttons --- */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold
+           transition-all duration-150 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50;
+  }
+  .btn-gold {
+    @apply btn bg-gold-sheen text-ink-950 shadow-gold hover:brightness-110;
+  }
+  .btn-ghost {
+    @apply btn bg-white/[0.06] text-slate-200 ring-1 ring-white/10 hover:bg-white/[0.10];
+  }
+  .btn-danger {
+    @apply btn bg-rose-500/15 text-rose-300 ring-1 ring-rose-500/30 hover:bg-rose-500/25;
+  }
+
+  /* --- Inputs --- */
+  .field {
+    @apply w-full rounded-xl bg-black/30 px-4 py-3 text-sm text-white ring-1 ring-white/10
+           transition placeholder:text-slate-600 hover:ring-white/[0.16] focus:ring-2 focus:ring-gold-400/60;
+  }
+  .field-sm {
+    @apply field px-3 py-2 text-xs;
+  }
+
+  /* --- Chips --- */
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold;
+  }
+  .chip-gold {
+    @apply chip bg-gold-400/15 text-gold-300 ring-1 ring-gold-400/30;
+  }
+  .chip-muted {
+    @apply chip bg-white/[0.06] text-slate-400 ring-1 ring-white/10;
+  }
+}
+
+@layer utilities {
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .text-gold-gradient {
+    @apply bg-gold-sheen bg-clip-text text-transparent;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
