@@ -28,7 +28,8 @@ const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
 const FINNHUB_API_KEY = "d52p16hr01qggm5t4cegd52p16hr01qggm5t4cf0"; 
 
-const LOGO_URL = "https://i.postimg.cc/WpxKS20L/5star.png";
+// Served from public/ — regenerate the sizes with `npm run icons`.
+const LOGO_URL = `${import.meta.env.BASE_URL}icon-192.png`;
 
 const INITIAL_STOCKS = [
   { id: 'AAPL', name: 'Apple Inc.', sector: 'Tech' },
@@ -104,6 +105,201 @@ const monthRange = (start, end) => {
 const currentMonthKey = () => {
   const now = new Date();
   return monthKey(now.getFullYear(), now.getMonth() + 1);
+};
+
+const dayKey = (date = new Date()) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+
+// Every calendar day of a month, stopping at `upTo` when the month is still running.
+const daysOfMonth = (mKey, upTo) => {
+  const { year, month } = parseMonth(mKey);
+  if (!year || !month) return [];
+  const lastDay = new Date(year, month, 0).getDate();
+  const days = [];
+  for (let d = 1; d <= lastDay; d++) {
+    const key = `${mKey}-${String(d).padStart(2, '0')}`;
+    if (upTo && key > upTo) break;
+    days.push(key);
+  }
+  return days;
+};
+
+// --- Chart ---
+
+// Validated against the dark chart surface (#101319): all slots inside the OKLCH
+// lightness band, above the chroma floor, over 3:1 contrast, and separated under
+// simulated protanopia/deuteranopia. Assigned by stable player order, never by
+// rank, so a standings change never repaints a team.
+const SERIES_COLORS = ['#d97706', '#0891b2', '#6366f1', '#e11d48', '#15803d', '#a855f7', '#0369a1', '#b45309'];
+
+const fmtAxisMoney = (v) => Math.abs(v) >= 1000 ? `$${(v / 1000).toFixed(1)}k` : `$${v.toFixed(0)}`;
+const fmtFullMoney = (v) => `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+
+const PortfolioChart = ({ series, days }) => {
+  const [hover, setHover] = useState(null);
+  const [showTable, setShowTable] = useState(false);
+
+  const W = 360, H = 176;
+  const pad = { l: 40, r: 46, t: 10, b: 22 };
+  const plotW = W - pad.l - pad.r;
+  const plotH = H - pad.t - pad.b;
+
+  const allValues = series.flatMap(s => s.points.filter(v => v !== null));
+  if (days.length < 2 || allValues.length === 0) {
+    return (
+      <p className="px-1 py-8 text-center text-sm text-slate-500">
+        Not enough history yet — values are recorded each day the league is open.
+      </p>
+    );
+  }
+
+  const rawMin = Math.min(...allValues);
+  const rawMax = Math.max(...allValues);
+  const span = rawMax - rawMin || Math.max(1, rawMax * 0.02);
+  const yMin = rawMin - span * 0.15;
+  const yMax = rawMax + span * 0.15;
+
+  const x = (i) => pad.l + (days.length === 1 ? plotW / 2 : (i / (days.length - 1)) * plotW);
+  const y = (v) => pad.t + plotH - ((v - yMin) / (yMax - yMin)) * plotH;
+
+  const gridValues = [0, 0.5, 1].map(t => yMin + t * (yMax - yMin));
+
+  // Show roughly four date ticks, always including the first and last day.
+  const tickStep = Math.max(1, Math.ceil(days.length / 4));
+  const tickIndexes = days.map((_, i) => i).filter(i => i % tickStep === 0 || i === days.length - 1);
+
+  const pathFor = (points) => {
+    let d = '';
+    let open = false;
+    points.forEach((v, i) => {
+      if (v === null) { open = false; return; }
+      d += `${open ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)} `;
+      open = true;
+    });
+    return d.trim();
+  };
+
+  const handleMove = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const px = ((e.clientX - rect.left) / rect.width) * W;
+    const ratio = (px - pad.l) / plotW;
+    const idx = Math.round(ratio * (days.length - 1));
+    setHover(Math.max(0, Math.min(days.length - 1, idx)));
+  };
+
+  if (showTable) {
+    return (
+      <div>
+        <div className="mb-2 flex justify-end">
+          <button onClick={() => setShowTable(false)} className="eyebrow transition hover:text-gold-300">Show chart</button>
+        </div>
+        <div className="max-h-64 overflow-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="sticky top-0 bg-ink-850">
+              <tr>
+                <th className="eyebrow py-1.5 pr-2">Day</th>
+                {series.map(s => <th key={s.id} className="eyebrow py-1.5 pr-2 text-right">{s.name}</th>)}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/[0.05]">
+              {days.map((d, i) => (
+                <tr key={d}>
+                  <td className="py-1.5 pr-2 font-mono text-slate-500">{d.slice(8)}</td>
+                  {series.map(s => (
+                    <td key={s.id} className="py-1.5 pr-2 text-right font-mono text-slate-300">
+                      {s.points[i] === null ? '—' : fmtFullMoney(s.points[i])}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
+
+  const hoveredDay = hover !== null ? days[hover] : null;
+
+  return (
+    <div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          {series.map(s => (
+            <span key={s.id} className="flex items-center gap-1.5 text-[11px] font-bold text-slate-400">
+              <span className="h-2 w-2 rounded-full" style={{ background: s.color }} />
+              {s.name}
+            </span>
+          ))}
+        </div>
+        <button onClick={() => setShowTable(true)} className="eyebrow transition hover:text-gold-300">Table</button>
+      </div>
+
+      <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full touch-none" role="img"
+        aria-label={`Team portfolio value by day, ${days[0]} to ${days[days.length - 1]}`}
+        onMouseMove={handleMove} onMouseLeave={() => setHover(null)} onTouchMove={(e) => handleMove(e.touches[0])}>
+
+        {gridValues.map((v, i) => (
+          <g key={i}>
+            <line x1={pad.l} x2={pad.l + plotW} y1={y(v)} y2={y(v)} stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
+            <text x={pad.l - 6} y={y(v) + 3} textAnchor="end" fontSize="8" fill="rgba(148,163,184,0.75)" fontFamily="ui-monospace, monospace">
+              {fmtAxisMoney(v)}
+            </text>
+          </g>
+        ))}
+
+        {tickIndexes.map(i => (
+          <text key={i} x={x(i)} y={H - 6} textAnchor="middle" fontSize="8" fill="rgba(148,163,184,0.75)" fontFamily="ui-monospace, monospace">
+            {days[i].slice(8)}
+          </text>
+        ))}
+
+        {hover !== null && (
+          <line x1={x(hover)} x2={x(hover)} y1={pad.t} y2={pad.t + plotH} stroke="rgba(255,255,255,0.22)" strokeWidth="1" />
+        )}
+
+        {series.map(s => (
+          <path key={s.id} d={pathFor(s.points)} fill="none" stroke={s.color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        ))}
+
+        {/* Direct end labels — identity is never carried by colour alone. */}
+        {series.map(s => {
+          const lastIdx = s.points.reduce((acc, v, i) => (v !== null ? i : acc), -1);
+          if (lastIdx < 0) return null;
+          return (
+            <text key={s.id} x={x(lastIdx) + 6} y={y(s.points[lastIdx]) + 3} fontSize="8" fill={s.color} fontWeight="700" fontFamily="ui-monospace, monospace">
+              {s.name.slice(0, 6)}
+            </text>
+          );
+        })}
+
+        {hover !== null && series.map(s => s.points[hover] === null ? null : (
+          <circle key={s.id} cx={x(hover)} cy={y(s.points[hover])} r="4" fill={s.color} stroke="#101319" strokeWidth="2" />
+        ))}
+      </svg>
+
+      <div className="mt-2 min-h-[52px] rounded-lg bg-black/25 px-3 py-2 ring-1 ring-white/[0.05]">
+        {hoveredDay ? (
+          <>
+            <div className="eyebrow mb-1">{hoveredDay}</div>
+            <div className="flex flex-wrap gap-x-4 gap-y-0.5">
+              {series.map(s => (
+                <span key={s.id} className="flex items-center gap-1.5 text-[11px]">
+                  <span className="h-2 w-2 rounded-full" style={{ background: s.color }} />
+                  <span className="text-slate-500">{s.name}</span>
+                  <span className="font-mono font-bold text-slate-200">
+                    {s.points[hover] === null ? '—' : fmtFullMoney(s.points[hover])}
+                  </span>
+                </span>
+              ))}
+            </div>
+          </>
+        ) : (
+          <p className="pt-2 text-center text-[11px] text-slate-600">Hover or drag across the chart for daily values.</p>
+        )}
+      </div>
+    </div>
+  );
 };
 
 // --- Helper Functions ---
@@ -187,6 +383,52 @@ const PANEL_ACCENTS = {
   blue: 'from-blue-300 to-blue-600',
   rose: 'from-rose-300 to-rose-600',
 };
+
+// --- Install prompt ---
+
+const isStandalone = () =>
+  window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+
+const detectPlatform = () => {
+  const ua = navigator.userAgent || '';
+  const iOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const android = /Android/i.test(ua);
+  return { iOS, android, mobile: iOS || android };
+};
+
+const InstallBanner = ({ platform, canPrompt, onInstall, onDismiss, hasNav }) => (
+  <div className={`pb-safe fixed inset-x-0 z-40 px-3 pb-2 ${hasNav ? 'bottom-[68px]' : 'bottom-0'}`}>
+    <div className="surface mx-auto max-w-lg animate-fade-up p-4 shadow-lift">
+      <div className="flex items-start gap-3">
+        <img src={LOGO_URL} alt="" className="h-10 w-10 shrink-0 rounded-xl" />
+        <div className="min-w-0 flex-1">
+          <h3 className="text-sm font-extrabold tracking-tight text-white">Add FiveStar to your home screen</h3>
+          <p className="mt-1 text-xs leading-relaxed text-slate-400">
+            {canPrompt ? (
+              'Install it for full-screen access and a one-tap icon.'
+            ) : platform.iOS ? (
+              <>Tap the Share button <span className="font-bold text-slate-200">⎋</span> in Safari, then choose{' '}
+              <span className="font-bold text-slate-200">Add to Home Screen</span>.</>
+            ) : (
+              <>Open your browser menu <span className="font-bold text-slate-200">⋮</span>, then choose{' '}
+              <span className="font-bold text-slate-200">Install app</span> or{' '}
+              <span className="font-bold text-slate-200">Add to Home screen</span>.</>
+            )}
+          </p>
+          <div className="mt-3 flex gap-2">
+            {canPrompt && <button onClick={onInstall} className="btn-gold px-3 py-1.5 text-xs">Install</button>}
+            <button onClick={onDismiss} className="btn-ghost px-3 py-1.5 text-xs">
+              {canPrompt ? 'Not now' : 'Got it'}
+            </button>
+          </div>
+        </div>
+        <button onClick={onDismiss} aria-label="Dismiss" className="shrink-0 text-slate-600 transition hover:text-white">
+          <X size={16}/>
+        </button>
+      </div>
+    </div>
+  </div>
+);
 
 const logoFallback = (e) => {
   e.target.onerror = null;
@@ -329,10 +571,22 @@ export default function FiveStarApp() {
   const [backfillMonth, setBackfillMonth] = useState(null);
   const [backfillScores, setBackfillScores] = useState({});
 
+  // Install prompt
+  const [showInstall, setShowInstall] = useState(false);
+  const [installEvent, setInstallEvent] = useState(null);
+  const platformRef = useRef(detectPlatform());
+
   // Real Data
+  const rateLimitedUntilRef = useRef(0);
   const [liveMarketData, setLiveMarketData] = useState(() => {
     const cached = localStorage.getItem('fivestar_market_data');
-    return cached ? JSON.parse(cached) : {};
+    if (!cached) return {};
+    try {
+      // Earlier builds cached zero prices from failed reads — drop them on load
+      // so a stale $0.00 can't keep scoring against a team.
+      const parsed = JSON.parse(cached);
+      return Object.fromEntries(Object.entries(parsed).filter(([, v]) => Number(v?.c) > 0));
+    } catch { return {}; }
   });
 
   // --- Persistence Hooks ---
@@ -340,6 +594,50 @@ export default function FiveStarApp() {
   useEffect(() => {
     localStorage.setItem('fivestar_view', currentView);
   }, [currentView]);
+
+  // Suggest installing to the home screen — mobile browsers only, once, and
+  // never when the app is already running standalone.
+  useEffect(() => {
+    if (!platformRef.current.mobile) return;
+    if (isStandalone()) return;
+    if (localStorage.getItem('fivestar_install_dismissed') === '1') return;
+
+    // Chrome/Edge fire this when the app meets the installability criteria; we
+    // hold onto it so the banner's button can open the real install dialog.
+    const onBeforeInstall = (e) => {
+      e.preventDefault();
+      setInstallEvent(e);
+    };
+    window.addEventListener('beforeinstallprompt', onBeforeInstall);
+
+    // Give the first screen a moment before interrupting.
+    const timer = setTimeout(() => setShowInstall(true), 2500);
+
+    const onInstalled = () => {
+      setShowInstall(false);
+      localStorage.setItem('fivestar_install_dismissed', '1');
+    };
+    window.addEventListener('appinstalled', onInstalled);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onBeforeInstall);
+      window.removeEventListener('appinstalled', onInstalled);
+      clearTimeout(timer);
+    };
+  }, []);
+
+  const dismissInstall = () => {
+    setShowInstall(false);
+    localStorage.setItem('fivestar_install_dismissed', '1');
+  };
+
+  const acceptInstall = async () => {
+    if (!installEvent) return;
+    installEvent.prompt();
+    try { await installEvent.userChoice; } catch { /* user dismissed */ }
+    setInstallEvent(null);
+    dismissInstall();
+  };
 
   useEffect(() => {
     const el = headerRef.current;
@@ -356,6 +654,45 @@ export default function FiveStarApp() {
       localStorage.setItem('fivestar_market_data', JSON.stringify(liveMarketData));
     }
   }, [liveMarketData]);
+
+  // The daily value chart has no historical source to draw on — Finnhub's candle
+  // endpoint is not on this key's plan — so each client records today's value as
+  // it goes. The commissioner records every team; a player records only their own.
+  const lastSnapshotRef = useRef(0);
+  useEffect(() => {
+    if (!activeLeague || activeLeague.status !== 'active') return;
+    if (!activeMembership || leaguePlayers.length === 0) return;
+    if (Object.keys(liveMarketData).length === 0) return;
+    if (Date.now() - lastSnapshotRef.current < 10 * 60 * 1000) return;
+
+    const today = dayKey();
+    const monthStart = `${activeLeague.currentMonth}-01`;
+    const targets = activeMembership.isAdmin
+        ? leaguePlayers.filter(p => p.isPlayer)
+        : leaguePlayers.filter(p => p.isPlayer && p.userId === user?.uid);
+
+    const batch = writeBatch(db);
+    let writes = 0;
+    targets.forEach(p => {
+        const ref = doc(db, 'artifacts', appId, 'public', 'data', 'league_players', p.id);
+        const update = {};
+        // Anchor the line at the month's start value, whenever the month was opened.
+        if (p.valueHistory?.[monthStart] === undefined && p.startValue) {
+            update[`valueHistory.${monthStart}`] = parseFloat(Number(p.startValue).toFixed(2));
+        }
+        const value = parseFloat(portfolioValueOf(p).toFixed(2));
+        const stored = p.valueHistory?.[today];
+        if (stored === undefined || Math.abs(stored - value) > Math.max(0.01, Math.abs(stored) * 0.0025)) {
+            update[`valueHistory.${today}`] = value;
+        }
+        if (Object.keys(update).length > 0) { batch.update(ref, update); writes++; }
+    });
+
+    if (writes > 0) {
+      lastSnapshotRef.current = Date.now();
+      batch.commit().catch(err => console.error('Value snapshot failed:', err));
+    }
+  }, [liveMarketData, activeLeague?.status, activeLeague?.currentMonth, leaguePlayers.length]);
 
   // --- 1. Authentication & Pre-fetching ---
 
@@ -474,41 +811,55 @@ export default function FiveStarApp() {
        return;
     }
 
-    const newData = { ...liveMarketData };
-    const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const fromTime = Math.floor(startOfMonth.getTime() / 1000);
-    const toTime = Math.floor(now.getTime() / 1000);
+    // Finnhub's free tier allows 60 calls/minute. Space requests so a full pool
+    // sweep can't trip the limit, and stand down entirely if it already has.
+    if (Date.now() < rateLimitedUntilRef.current) return;
 
+    const newData = { ...liveMarketData };
     let hasUpdates = false;
+
     for (const ticker of trackedTickers) {
       try {
-        await sleep(200);
+        await sleep(1100);
         const quoteRes = await fetch(`https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${FINNHUB_API_KEY}`);
-        const quoteData = await quoteRes.json();
 
-        if (!quoteData.c && quoteData.c !== 0) continue;
-
-        let monthOpen = newData[ticker]?.monthOpen;
-        if (!monthOpen || monthOpen === 0) {
-            await sleep(200);
-            const candleRes = await fetch(`https://finnhub.io/api/v1/stock/candle?symbol=${ticker}&resolution=D&from=${fromTime}&to=${toTime}&token=${FINNHUB_API_KEY}`);
-            const candleData = await candleRes.json();
-            if (candleData.s === "ok" && candleData.o?.length > 0) monthOpen = candleData.o[0];
-            else monthOpen = quoteData.pc || quoteData.c;
+        if (quoteRes.status === 429) {
+          // Back off for a full minute rather than burning the rest of the sweep.
+          rateLimitedUntilRef.current = Date.now() + 60000;
+          console.warn('Finnhub rate limit hit — keeping last known prices for this cycle.');
+          break;
         }
 
-        newData[ticker] = { c: quoteData.c, monthOpen };
+        const quoteData = await quoteRes.json();
+        const price = Number(quoteData.c);
+
+        // A zero or missing quote means the read failed (unknown symbol, throttled,
+        // or not covered by the plan) — it is never a real price. Keep the last
+        // good value instead of overwriting it with something that scores as $0.
+        if (!Number.isFinite(price) || price <= 0) {
+          console.warn(`No usable quote for ${ticker} — keeping previous price.`);
+          continue;
+        }
+
+        const prevClose = Number(quoteData.pc);
+        const existingOpen = Number(newData[ticker]?.monthOpen);
+        const monthOpen = existingOpen > 0 ? existingOpen : (prevClose > 0 ? prevClose : price);
+
+        newData[ticker] = { c: price, monthOpen };
         hasUpdates = true;
       } catch (err) { console.error(`Error fetching ${ticker}:`, err); }
     }
     if (hasUpdates) setLiveMarketData(newData);
   };
 
+  // Finnhub's free tier shares 60 calls/minute across every signed-in client, so a
+  // per-minute sweep from several open tabs is what starves tickers of a price.
+  // Scoring is monthly — five-minute freshness is plenty, and prices are cached
+  // to localStorage so the UI is never empty between sweeps.
   useEffect(() => {
     if (!user) return;
     fetchStockData();
-    const interval = setInterval(fetchStockData, 60000);
+    const interval = setInterval(fetchStockData, 300000);
     return () => clearInterval(interval);
   }, [user, trackedTickers.length, activeLeague?.id]);
 
@@ -807,12 +1158,46 @@ export default function FiveStarApp() {
 
   // --- Calculations ---
 
+  // Live quote first, then the month's base price, then the league's opening
+  // price. Returns 0 only when nothing is known — callers show that as "no quote"
+  // rather than pricing the position at zero.
+  const priceOf = (stockId) => {
+      const live = Number(liveMarketData[stockId]?.c);
+      if (live > 0) return live;
+      const base = Number(activeLeague?.startingPrices?.[stockId]);
+      if (base > 0) return base;
+      const initial = Number(activeLeague?.initialPrices?.[stockId]);
+      return initial > 0 ? initial : 0;
+  };
+
+  const hasPrice = (stockId) => priceOf(stockId) > 0;
+
+  const portfolioValueOf = (player) => {
+      let total = parseFloat(player?.cash) || 0;
+      (player?.roster || []).forEach(item => {
+          total += (parseFloat(item.shares) || 0) * priceOf(item.id);
+      });
+      return total;
+  };
+
+  // A stock's move since the month opened, used in the matchup breakdown.
+  const stockMonthChange = (stockId) => {
+      const base = activeLeague?.startingPrices?.[stockId] || liveMarketData[stockId]?.monthOpen;
+      const price = liveMarketData[stockId]?.c;
+      if (!base || !price) return null;
+      return ((price - base) / base) * 100;
+  };
+
   const calculateReturn = (roster, cash, basePrices, manualStartValue) => {
       let currentValue = parseFloat(cash) || 0;
       if (roster && Array.isArray(roster)) {
           roster.forEach(item => {
               const shares = parseFloat(item.shares) || 0;
-              const currPrice = liveMarketData[item.id]?.c || basePrices[item.id] || 0;
+              // Live quote, else this month's base, else the league open — a
+              // failed price read must not value the position at zero.
+              const live = Number(liveMarketData[item.id]?.c);
+              const base = Number(basePrices?.[item.id]);
+              const currPrice = live > 0 ? live : (base > 0 ? base : priceOf(item.id));
               currentValue += shares * currPrice;
           });
       }
@@ -824,7 +1209,10 @@ export default function FiveStarApp() {
           if (roster && Array.isArray(roster)) {
               roster.forEach(item => {
                   const shares = parseFloat(item.shares) || 0;
-                  const startPrice = basePrices[item.id] || 1; 
+                  // Falling back to $1 here would read as a ~10,000% gain. With no
+                  // base price, use the current price so the holding scores flat.
+                  const base = Number(basePrices?.[item.id]);
+                  const startPrice = base > 0 ? base : priceOf(item.id);
                   startValue += shares * startPrice;
               });
           }
@@ -917,8 +1305,28 @@ export default function FiveStarApp() {
       await fetchStockData();
       const allowance = Number(activeLeague.monthlyAllowance) || 0;
       const pool = activeLeague.stockPool || [];
+
+      // A base price of 0 would make every holding of that ticker score as a total
+      // loss, so carry the last good price forward and never write a zero.
       const starts = {};
-      pool.forEach(id => { starts[id] = liveMarketData[id]?.c || 0; });
+      const missing = [];
+      pool.forEach(id => {
+          const live = Number(liveMarketData[id]?.c);
+          const prevBase = Number(activeLeague.startingPrices?.[id]);
+          const prevInitial = Number(activeLeague.initialPrices?.[id]);
+          if (live > 0) starts[id] = live;
+          else if (prevBase > 0) starts[id] = prevBase;
+          else if (prevInitial > 0) starts[id] = prevInitial;
+          else missing.push(id);
+      });
+
+      if (missing.length > 0) {
+          const proceed = confirm(
+              `No price available for ${missing.join(', ')} — the market data feed didn't return one.\n\n` +
+              `Open the month anyway? Those tickers will have no base price until you set one from the Market tab (pencil icon).`
+          );
+          if (!proceed) return;
+      }
 
       const leagueUpdate = { status: 'active', startingPrices: starts };
       if (!activeLeague.initialPrices || Object.keys(activeLeague.initialPrices).length === 0) {
@@ -1086,6 +1494,18 @@ export default function FiveStarApp() {
 
   // --- Views ---
 
+  // Rendered on the signed-out screens too — a brand-new visitor is exactly who
+  // this is for, and they haven't got past the login form yet.
+  const installBanner = (hasNav) => showInstall ? (
+      <InstallBanner
+        platform={platformRef.current}
+        canPrompt={!!installEvent}
+        onInstall={acceptInstall}
+        onDismiss={dismissInstall}
+        hasNav={hasNav}
+      />
+  ) : null;
+
   if (isLoading || (user && hasProfile && !isDataLoaded)) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -1101,6 +1521,7 @@ export default function FiveStarApp() {
   }
 
   if (!user) return (
+    <>
     <AuthShell
       eyebrow="Five Star Fantasy Investment League"
       title={isSignUp ? 'Join the league' : 'Welcome back'}
@@ -1121,6 +1542,9 @@ export default function FiveStarApp() {
         </button>
       </div>
     </AuthShell>
+    {/* Outside AuthShell: its card carries a transform, which would trap a fixed child. */}
+    {installBanner(false)}
+    </>
   );
 
   if (!hasProfile) return (
@@ -1360,6 +1784,20 @@ export default function FiveStarApp() {
       const standings = [...leaguePlayers].filter(p => p.isPlayer).sort((a,b) => b.wins - a.wins || b.points - a.points);
       const status = statusMeta(activeLeague?.status);
 
+      // Colour is keyed to a stable player order, never to standings position.
+      const charted = [...leaguePlayers].filter(p => p.isPlayer).sort((a, b) => a.userId.localeCompare(b.userId));
+      const chartDays = daysOfMonth(activeLeague?.currentMonth, dayKey());
+      const chartSeries = charted.slice(0, SERIES_COLORS.length).map((p, i) => {
+          let carried = null;
+          const points = chartDays.map(d => {
+              const v = p.valueHistory?.[d];
+              if (v !== undefined) carried = v;
+              return carried; // carry the last known value across days nobody opened the app
+          });
+          return { id: p.userId, name: p.name || 'Player', color: SERIES_COLORS[i], points };
+      });
+      const hasChartData = chartSeries.some(s => s.points.some(v => v !== null));
+
       return (
       <div className="space-y-5">
           <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 pb-1">
@@ -1445,6 +1883,22 @@ export default function FiveStarApp() {
                           );
                       })}
                   </div>
+                  )}
+              </div>
+
+              <div className="surface p-4">
+                  <div className="mb-3 flex items-end justify-between gap-3">
+                      <h3 className="flex items-center gap-2 text-sm font-extrabold uppercase tracking-wide text-white">
+                          <Activity size={15} className="text-gold-400"/> Team value
+                      </h3>
+                      <span className="eyebrow">{monthLabel(activeLeague?.currentMonth)}</span>
+                  </div>
+                  {chartSeries.length === 0 || !hasChartData ? (
+                      <p className="px-1 py-8 text-center text-sm text-slate-500">
+                          No daily values recorded yet. They start accumulating once the commissioner opens the month.
+                      </p>
+                  ) : (
+                      <PortfolioChart series={chartSeries} days={chartDays} />
                   )}
               </div>
               </>
@@ -1564,17 +2018,26 @@ export default function FiveStarApp() {
                       </div>
 
                       <div className="shrink-0 text-right">
-                          <div className="font-mono text-base font-bold text-white">${stock.price.toFixed(2)}</div>
-                          <div className="mt-1 flex flex-col items-end gap-0.5">
-                              <div className="flex items-center gap-1.5">
-                                  <span className="eyebrow">MTD</span>
-                                  <Pct value={stock.mtdChange} className="text-[11px]" />
+                          {stock.price > 0 ? (
+                            <>
+                              <div className="font-mono text-base font-bold text-white">${stock.price.toFixed(2)}</div>
+                              <div className="mt-1 flex flex-col items-end gap-0.5">
+                                  <div className="flex items-center gap-1.5">
+                                      <span className="eyebrow">MTD</span>
+                                      <Pct value={stock.mtdChange} className="text-[11px]" />
+                                  </div>
+                                  <div className="flex items-center gap-1.5">
+                                      <span className="eyebrow">TOT</span>
+                                      <Pct value={stock.totalChange} className="text-[11px]" />
+                                  </div>
                               </div>
-                              <div className="flex items-center gap-1.5">
-                                  <span className="eyebrow">TOT</span>
-                                  <Pct value={stock.totalChange} className="text-[11px]" />
-                              </div>
-                          </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="font-mono text-base font-bold text-slate-600">—</div>
+                              <div className="mt-1 text-[10px] font-bold uppercase tracking-wide text-amber-500/80">No quote</div>
+                            </>
+                          )}
                       </div>
 
                       {canDraft && (
@@ -1604,16 +2067,23 @@ export default function FiveStarApp() {
       const roster = activeMembership.roster || [];
       const cash = activeMembership.cash || 0;
       const isOpen = ['ready', 'active'].includes(activeLeague?.status);
-      let portfolioValue = cash;
-      roster.forEach((i) => {
-          const price = liveMarketData[i.id]?.c || 0;
-          portfolioValue += (i.shares || 0) * price;
-      });
+      const portfolioValue = portfolioValueOf(activeMembership);
       const holdingsValue = portfolioValue - cash;
+      const unpriced = roster.filter(i => !hasPrice(i.id));
       const monthReturn = calculateReturn(roster, cash, activeLeague?.startingPrices || {}, activeMembership.startValue);
 
       return (
           <div className="space-y-4">
+              {unpriced.length > 0 && (
+                  <div className="flex items-start gap-2.5 rounded-xl bg-amber-500/10 px-4 py-3 ring-1 ring-amber-500/25">
+                      <Activity size={15} className="mt-0.5 shrink-0 text-amber-400" />
+                      <p className="text-xs leading-relaxed text-amber-200/90">
+                          No price for <span className="font-mono font-bold">{unpriced.map(i => i.id).join(', ')}</span> —
+                          those holdings are excluded from your total, so your return is understated. Ask your commissioner
+                          to set a base price from the Market tab.
+                      </p>
+                  </div>
+              )}
               <div className="surface relative overflow-hidden p-6">
                   <div className="pointer-events-none absolute -right-16 -top-20 h-52 w-52 rounded-full bg-gold-400/[0.13] blur-3xl" />
                   <div className="relative">
@@ -1680,8 +2150,17 @@ export default function FiveStarApp() {
                                 <div className="truncate text-xs text-slate-500">{stock?.name || item.id}</div>
                             </div>
                             <div className="shrink-0 text-right">
-                                <div className="font-mono text-base font-bold text-white">${val.toFixed(2)}</div>
-                                <div className="font-mono text-[11px] text-slate-500">${price.toFixed(2)} / sh</div>
+                                {price > 0 ? (
+                                  <>
+                                    <div className="font-mono text-base font-bold text-white">${val.toFixed(2)}</div>
+                                    <div className="font-mono text-[11px] text-slate-500">${price.toFixed(2)} / sh</div>
+                                  </>
+                                ) : (
+                                  <>
+                                    <div className="font-mono text-base font-bold text-slate-600">—</div>
+                                    <div className="text-[10px] font-bold uppercase tracking-wide text-amber-500/80">No quote</div>
+                                  </>
+                                )}
                             </div>
                             {isOpen && (
                               <button onClick={() => removeFromTeam(item.id)} aria-label={`Remove ${item.id}`}
@@ -1775,6 +2254,64 @@ export default function FiveStarApp() {
                         </div>
                     </div>
                 </div>
+
+                {[m.p1, m.p2].filter(uid => uid && uid !== 'BYE').map(uid => {
+                    const player = leaguePlayers.find(p => p.userId === uid);
+                    if (!player) return null;
+                    const roster = player.roster || [];
+                    const cash = parseFloat(player.cash) || 0;
+                    const total = portfolioValueOf(player);
+                    return (
+                        <div key={uid} className="surface overflow-hidden">
+                            <div className="flex items-center justify-between border-b border-white/[0.07] px-4 py-3">
+                                <div className="flex min-w-0 items-center gap-2.5">
+                                    <Avatar url={player.avatar} name={player.name} size="sm" />
+                                    <span className="truncate text-sm font-bold text-white">{player.name}</span>
+                                </div>
+                                <div className="shrink-0 text-right">
+                                    <div className="eyebrow">Portfolio</div>
+                                    <div className="font-mono text-sm font-bold text-white">{fmtFullMoney(total)}</div>
+                                </div>
+                            </div>
+
+                            {roster.length === 0 ? (
+                                <p className="px-4 py-6 text-center text-sm text-slate-500">No holdings.</p>
+                            ) : (
+                                <div className="divide-y divide-white/[0.05]">
+                                    {roster.map(item => {
+                                        const change = stockMonthChange(item.id);
+                                        const price = priceOf(item.id);
+                                        const value = (parseFloat(item.shares) || 0) * price;
+                                        return (
+                                            <div key={item.id} className="flex items-center gap-3 px-4 py-2.5">
+                                                <div className="min-w-0 flex-1">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="font-mono text-sm font-bold text-white">{item.id}</span>
+                                                        {(player.franchiseStocks || []).includes(item.id) && <span className="eyebrow text-gold-400">F</span>}
+                                                    </div>
+                                                    <div className="font-mono text-[11px] text-slate-500">
+                                                        {item.shares} sh @ ${price.toFixed(2)}
+                                                    </div>
+                                                </div>
+                                                <div className="shrink-0 text-right">
+                                                    <div className="font-mono text-sm font-bold text-slate-200">{fmtFullMoney(value)}</div>
+                                                    {change === null
+                                                        ? <span className="font-mono text-[11px] text-slate-600">—</span>
+                                                        : <Pct value={change} className="text-[11px]" />}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+
+                            <div className="flex items-center justify-between border-t border-white/[0.07] bg-black/20 px-4 py-2.5">
+                                <span className="eyebrow">Cash on hand</span>
+                                <span className="font-mono text-sm font-bold text-white">{fmtFullMoney(cash)}</span>
+                            </div>
+                        </div>
+                    );
+                })}
             </div>
         );
       }
@@ -2242,6 +2779,8 @@ export default function FiveStarApp() {
          {activeMembership && currentView === 'matchups' && renderMatchups()}
          {activeMembership?.isAdmin && currentView === 'admin' && renderAdmin()}
       </main>
+
+      {installBanner(true)}
 
       <nav className="pb-safe fixed inset-x-0 bottom-0 z-30 border-t border-white/[0.07] bg-ink-950/85 backdrop-blur-xl">
         <div className="mx-auto flex h-[68px] max-w-lg items-stretch justify-between px-3">
