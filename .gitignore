@@ -12,6 +12,12 @@ dist
 dist-ssr
 *.local
 
+# Local secrets — never commit these
+.env
+.env.*
+service-account*.json
+*-firebase-adminsdk-*.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

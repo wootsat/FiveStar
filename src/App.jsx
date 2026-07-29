@@ -1,14 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  TrendingUp, Trophy, Plus, Minus, RefreshCw, Shield, Crown, PlayCircle, Lock, LogOut, CheckCircle2, RotateCcw, Search, Save, DollarSign, Wallet, Users, BarChart3, PieChart, Settings, ArrowRight, Copy, Swords, ChevronLeft, Calendar, Edit2, Trash2, User, Upload, X, ArrowUp, ArrowDown, ArrowUpDown, Medal, Sparkles, Activity, CircleDollarSign
+  TrendingUp, Trophy, Plus, Minus, RefreshCw, Shield, Crown, PlayCircle, Lock, LogOut, CheckCircle2, RotateCcw, Search, Save, DollarSign, Wallet, Users, BarChart3, PieChart, Settings, ArrowRight, Copy, Swords, ChevronLeft, Calendar, Edit2, Trash2, User, Upload, X, ArrowUp, ArrowDown, ArrowUpDown, Medal, Sparkles, Activity, CircleDollarSign, BookOpen
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut 
 } from 'firebase/auth';
-import { 
-  getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, writeBatch, getDoc, query, where, deleteDoc, getDocs 
+import {
+  getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, writeBatch, getDoc, query, where, deleteDoc, getDocs
 } from 'firebase/firestore';
+import { recapFor } from './recaps';
 
 // --- CONFIGURATION ---
 
@@ -135,20 +136,29 @@ const SERIES_COLORS = ['#d97706', '#0891b2', '#6366f1', '#e11d48', '#15803d', '#
 const fmtAxisMoney = (v) => Math.abs(v) >= 1000 ? `$${(v / 1000).toFixed(1)}k` : `$${v.toFixed(0)}`;
 const fmtFullMoney = (v) => `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 
-const PortfolioChart = ({ series, days }) => {
+// `labels` are the x-axis tick captions, one per point. `format` switches the
+// y-axis and tooltip between dollars and percentages.
+const PortfolioChart = ({ series, labels, format = 'money', axisLabel = 'Point', emptyMessage }) => {
   const [hover, setHover] = useState(null);
   const [showTable, setShowTable] = useState(false);
+
+  const isPercent = format === 'percent';
+  const fmtAxis = isPercent ? (v) => `${v.toFixed(1)}%` : fmtAxisMoney;
+  const fmtValue = isPercent
+    ? (v) => `${v > 0 ? '+' : ''}${Number(v).toFixed(2)}%`
+    : fmtFullMoney;
 
   const W = 360, H = 176;
   const pad = { l: 40, r: 46, t: 10, b: 22 };
   const plotW = W - pad.l - pad.r;
   const plotH = H - pad.t - pad.b;
 
+  const days = labels;
   const allValues = series.flatMap(s => s.points.filter(v => v !== null));
   if (days.length < 2 || allValues.length === 0) {
     return (
       <p className="px-1 py-8 text-center text-sm text-slate-500">
-        Not enough history yet — values are recorded each day the league is open.
+        {emptyMessage || 'Not enough history yet — values are recorded each day the league is open.'}
       </p>
     );
   }
@@ -197,17 +207,17 @@ const PortfolioChart = ({ series, days }) => {
           <table className="w-full text-left text-xs">
             <thead className="sticky top-0 bg-ink-850">
               <tr>
-                <th className="eyebrow py-1.5 pr-2">Day</th>
+                <th className="eyebrow py-1.5 pr-2">{axisLabel}</th>
                 {series.map(s => <th key={s.id} className="eyebrow py-1.5 pr-2 text-right">{s.name}</th>)}
               </tr>
             </thead>
             <tbody className="divide-y divide-white/[0.05]">
               {days.map((d, i) => (
                 <tr key={d}>
-                  <td className="py-1.5 pr-2 font-mono text-slate-500">{d.slice(8)}</td>
+                  <td className="py-1.5 pr-2 font-mono text-slate-500">{d}</td>
                   {series.map(s => (
                     <td key={s.id} className="py-1.5 pr-2 text-right font-mono text-slate-300">
-                      {s.points[i] === null ? '—' : fmtFullMoney(s.points[i])}
+                      {s.points[i] === null ? '—' : fmtValue(s.points[i])}
                     </td>
                   ))}
                 </tr>
@@ -236,23 +246,29 @@ const PortfolioChart = ({ series, days }) => {
       </div>
 
       <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full touch-none" role="img"
-        aria-label={`Team portfolio value by day, ${days[0]} to ${days[days.length - 1]}`}
+        aria-label={`${isPercent ? 'Team monthly return' : 'Team value'} by ${axisLabel.toLowerCase()}, ${days[0]} to ${days[days.length - 1]}`}
         onMouseMove={handleMove} onMouseLeave={() => setHover(null)} onTouchMove={(e) => handleMove(e.touches[0])}>
 
         {gridValues.map((v, i) => (
           <g key={i}>
             <line x1={pad.l} x2={pad.l + plotW} y1={y(v)} y2={y(v)} stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
             <text x={pad.l - 6} y={y(v) + 3} textAnchor="end" fontSize="8" fill="rgba(148,163,184,0.75)" fontFamily="ui-monospace, monospace">
-              {fmtAxisMoney(v)}
+              {fmtAxis(v)}
             </text>
           </g>
         ))}
 
         {tickIndexes.map(i => (
           <text key={i} x={x(i)} y={H - 6} textAnchor="middle" fontSize="8" fill="rgba(148,163,184,0.75)" fontFamily="ui-monospace, monospace">
-            {days[i].slice(8)}
+            {days[i]}
           </text>
         ))}
+
+        {/* Break-even line — the only value that matters on a % chart. */}
+        {isPercent && yMin < 0 && yMax > 0 && (
+          <line x1={pad.l} x2={pad.l + plotW} y1={y(0)} y2={y(0)}
+            stroke="rgba(255,255,255,0.28)" strokeWidth="1" strokeDasharray="3 3" />
+        )}
 
         {hover !== null && (
           <line x1={x(hover)} x2={x(hover)} y1={pad.t} y2={pad.t + plotH} stroke="rgba(255,255,255,0.22)" strokeWidth="1" />
@@ -288,7 +304,7 @@ const PortfolioChart = ({ series, days }) => {
                   <span className="h-2 w-2 rounded-full" style={{ background: s.color }} />
                   <span className="text-slate-500">{s.name}</span>
                   <span className="font-mono font-bold text-slate-200">
-                    {s.points[hover] === null ? '—' : fmtFullMoney(s.points[hover])}
+                    {s.points[hover] === null ? '—' : fmtValue(s.points[hover])}
                   </span>
                 </span>
               ))}
@@ -520,6 +536,7 @@ export default function FiveStarApp() {
   });
 
   const [selectedMatchup, setSelectedMatchup] = useState(null);
+  const [matchupsMonth, setMatchupsMonth] = useState(null); // null = follow the open month
   const [showLeagueCreator, setShowLeagueCreator] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [enlargedAvatar, setEnlargedAvatar] = useState(null);
@@ -1364,8 +1381,36 @@ export default function FiveStarApp() {
           }
       });
       const newSchedule = { ...activeLeague.schedule, [activeLeague.currentMonth]: updates };
+
+      // Freeze what the month actually looked like — closing prices and each
+      // team's book. Rosters keep changing after this, so the recap writer has
+      // no other way to describe a past month accurately.
+      const closingPrices = {};
+      (activeLeague.stockPool || []).forEach(id => {
+          const price = priceOf(id);
+          if (price > 0) closingPrices[id] = price;
+      });
+      const teams = {};
+      leaguePlayers.filter(p => p.isPlayer).forEach(p => {
+          teams[p.userId] = {
+              name: p.name || 'Player',
+              roster: (p.roster || []).map(i => ({ id: i.id, shares: parseFloat(i.shares) || 0 })),
+              cash: parseFloat(p.cash) || 0,
+              startValue: parseFloat(p.startValue) || 0,
+              endValue: parseFloat(portfolioValueOf(p).toFixed(2)),
+          };
+      });
+
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), {
-          status: 'completed', matchups: updates, schedule: newSchedule
+          status: 'completed',
+          matchups: updates,
+          schedule: newSchedule,
+          [`monthSnapshots.${activeLeague.currentMonth}`]: {
+              startPrices: prices,
+              endPrices: closingPrices,
+              teams,
+              closedAt: Date.now(),
+          },
       });
       await recomputeStandings(newSchedule);
   };
@@ -1786,17 +1831,44 @@ export default function FiveStarApp() {
 
       // Colour is keyed to a stable player order, never to standings position.
       const charted = [...leaguePlayers].filter(p => p.isPlayer).sort((a, b) => a.userId.localeCompare(b.userId));
+      const palette = (i) => SERIES_COLORS[i];
+
+      // --- Season chart: portfolio value at each month's close -------------
+      const seasonMonths2 = allMonths.filter(m => !activeLeague?.currentMonth || m <= activeLeague.currentMonth);
+
+      const valueAtMonth = (p, m) => {
+          const closed = Number(activeLeague?.monthSnapshots?.[m]?.teams?.[p.userId]?.endValue);
+          if (closed > 0) return closed;
+          if (m === activeLeague?.currentMonth) return portfolioValueOf(p);
+          // Months closed before snapshots existed: use that month's last daily reading.
+          const daysIn = Object.keys(p.valueHistory || {}).filter(d => d.startsWith(`${m}-`)).sort();
+          if (daysIn.length) return Number(p.valueHistory[daysIn[daysIn.length - 1]]);
+          return null;
+      };
+
+      const seasonSeries = charted.slice(0, SERIES_COLORS.length).map((p, i) => ({
+          id: p.userId,
+          name: p.name || 'Player',
+          color: palette(i),
+          points: seasonMonths2.map(m => valueAtMonth(p, m)),
+      }));
+      const seasonLabels = seasonMonths2.map(m => MONTH_NAMES[parseMonth(m).month - 1]?.slice(0, 3) || '—');
+      const hasSeasonData = seasonSeries.some(s => s.points.filter(v => v !== null).length > 1);
+
+      // --- Month chart: the % return that decides each head-to-head --------
       const chartDays = daysOfMonth(activeLeague?.currentMonth, dayKey());
-      const chartSeries = charted.slice(0, SERIES_COLORS.length).map((p, i) => {
+      const monthSeries = charted.slice(0, SERIES_COLORS.length).map((p, i) => {
+          const start = Number(p.startValue);
           let carried = null;
           const points = chartDays.map(d => {
               const v = p.valueHistory?.[d];
-              if (v !== undefined) carried = v;
-              return carried; // carry the last known value across days nobody opened the app
+              if (v !== undefined && start > 0) carried = ((Number(v) - start) / start) * 100;
+              return carried;
           });
-          return { id: p.userId, name: p.name || 'Player', color: SERIES_COLORS[i], points };
+          return { id: p.userId, name: p.name || 'Player', color: palette(i), points };
       });
-      const hasChartData = chartSeries.some(s => s.points.some(v => v !== null));
+      const monthLabels = chartDays.map(d => d.slice(8));
+      const hasMonthData = monthSeries.some(s => s.points.some(v => v !== null));
 
       return (
       <div className="space-y-5">
@@ -1889,16 +1961,44 @@ export default function FiveStarApp() {
               <div className="surface p-4">
                   <div className="mb-3 flex items-end justify-between gap-3">
                       <h3 className="flex items-center gap-2 text-sm font-extrabold uppercase tracking-wide text-white">
-                          <Activity size={15} className="text-gold-400"/> Team value
+                          <Trophy size={15} className="text-gold-400"/> Chase for the Terminator
+                      </h3>
+                      <span className="eyebrow">Season</span>
+                  </div>
+                  {seasonSeries.length === 0 || !hasSeasonData ? (
+                      <p className="px-1 py-8 text-center text-sm text-slate-500">
+                          The season chart fills in as months are scored — one point per month.
+                      </p>
+                  ) : (
+                      <PortfolioChart
+                          series={seasonSeries}
+                          labels={seasonLabels}
+                          format="money"
+                          axisLabel="Month"
+                          emptyMessage="Not enough of the season has been played yet."
+                      />
+                  )}
+              </div>
+
+              <div className="surface p-4">
+                  <div className="mb-3 flex items-end justify-between gap-3">
+                      <h3 className="flex items-center gap-2 text-sm font-extrabold uppercase tracking-wide text-white">
+                          <Activity size={15} className="text-gold-400"/> This month's race
                       </h3>
                       <span className="eyebrow">{monthLabel(activeLeague?.currentMonth)}</span>
                   </div>
-                  {chartSeries.length === 0 || !hasChartData ? (
+                  {monthSeries.length === 0 || !hasMonthData ? (
                       <p className="px-1 py-8 text-center text-sm text-slate-500">
-                          No daily values recorded yet. They start accumulating once the commissioner opens the month.
+                          No daily readings yet. They start accumulating once the commissioner opens the month.
                       </p>
                   ) : (
-                      <PortfolioChart series={chartSeries} days={chartDays} />
+                      <PortfolioChart
+                          series={monthSeries}
+                          labels={monthLabels}
+                          format="percent"
+                          axisLabel="Day"
+                          emptyMessage="No daily returns recorded for this month yet."
+                      />
                   )}
               </div>
               </>
@@ -2196,8 +2296,17 @@ export default function FiveStarApp() {
   };
 
   const renderMatchups = () => {
-      const isLive = activeLeague?.status === 'active';
+      // The tab defaults to the open month but can look back at any scored one.
+      const viewedMonth = matchupsMonth || activeLeague?.currentMonth;
+      const isCurrent = viewedMonth === activeLeague?.currentMonth;
+      const isLive = activeLeague?.status === 'active' && isCurrent;
       const avatarFor = (uid) => leaguePlayers.find(p => p.userId === uid)?.avatar;
+      const monthMatchups = isCurrent
+          ? (activeLeague?.matchups || [])
+          : (activeLeague?.schedule?.[viewedMonth] || []);
+      // Shipped in src/recaps.js; falls back to a Firestore-stored recap if one
+      // was ever written there.
+      const recap = recapFor(activeLeague?.id, viewedMonth) || activeLeague?.recaps?.[viewedMonth]?.text;
 
       if (selectedMatchup) {
         const m = selectedMatchup;
@@ -2214,7 +2323,7 @@ export default function FiveStarApp() {
                 <div className="surface relative overflow-hidden bg-card-glow p-6">
                     <div className="mb-8 text-center">
                         <div className="eyebrow text-gold-400/80">{m.type || 'Regular season'}</div>
-                        <h2 className="mt-1 text-2xl font-extrabold tracking-tightest text-white">{monthLabel(activeLeague?.currentMonth)}</h2>
+                        <h2 className="mt-1 text-2xl font-extrabold tracking-tightest text-white">{monthLabel(viewedMonth)}</h2>
                         {isLive && (
                           <span className="chip mt-2 bg-emerald-400/15 text-emerald-300 ring-1 ring-emerald-400/30">
                             <span className="h-1.5 w-1.5 animate-ticker-pulse rounded-full bg-current" /> Live
@@ -2318,11 +2427,46 @@ export default function FiveStarApp() {
 
       return (
         <div className="space-y-3">
-            <SectionHeading icon={Swords} title={monthLabel(activeLeague?.currentMonth)} meta={isLive ? 'Live scoring' : isPlayoffMonth ? 'Playoffs' : 'Head to head'} />
+            <SectionHeading icon={Swords} title={monthLabel(viewedMonth)} meta={isLive ? 'Live scoring' : isPlayoffMonth && isCurrent ? 'Playoffs' : 'Head to head'} />
 
-            {!activeLeague?.matchups?.length ? (
+            {allMonths.length > 1 && (
+                <div className="no-scrollbar -mx-4 flex gap-1.5 overflow-x-auto px-4 pb-1">
+                    {allMonths.map(m => {
+                        const scored = (activeLeague?.schedule?.[m] || []).some(x => x.scored);
+                        const active = m === viewedMonth;
+                        return (
+                            <button key={m} onClick={() => { setMatchupsMonth(m); setSelectedMatchup(null); }}
+                              className={`flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-bold transition ${active
+                                  ? 'bg-gold-sheen text-ink-950'
+                                  : 'bg-white/[0.05] text-slate-400 ring-1 ring-white/10 hover:bg-white/[0.10] hover:text-white'}`}>
+                                {monthLabel(m, true)}
+                                {(recapFor(activeLeague?.id, m) || activeLeague?.recaps?.[m]) && <BookOpen size={11} className={active ? '' : 'text-gold-400'} />}
+                                {!scored && m !== activeLeague?.currentMonth && <span className={`h-1 w-1 rounded-full ${active ? 'bg-ink-950/40' : 'bg-slate-600'}`} />}
+                            </button>
+                        );
+                    })}
+                </div>
+            )}
+
+            {recap && (
+                <Card className="bg-card-glow p-5">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                        <h3 className="flex items-center gap-2 text-sm font-extrabold uppercase tracking-wide text-white">
+                            <BookOpen size={15} className="text-gold-400"/> The recap
+                        </h3>
+                        <span className="eyebrow">{monthLabel(viewedMonth, true)}</span>
+                    </div>
+                    <div className="space-y-3">
+                        {String(recap).split(/\n\s*\n/).filter(Boolean).map((para, i) => (
+                            <p key={i} className="text-sm leading-relaxed text-slate-300">{para}</p>
+                        ))}
+                    </div>
+                </Card>
+            )}
+
+            {!monthMatchups.length ? (
                 <EmptyState icon={Swords} title="No matchups yet" body="The commissioner hasn't generated the schedule for this month." />
-            ) : activeLeague.matchups.map((m, i) => {
+            ) : monthMatchups.map((m, i) => {
                 let p1LiveScore = m.p1Score;
                 let p2LiveScore = m.p2Score;
                 if (isLive) {
@@ -2791,7 +2935,7 @@ export default function FiveStarApp() {
               <button
                 key={item.key}
                 disabled={disabled}
-                onClick={() => { setCurrentView(item.key); if (item.key === 'matchups') setSelectedMatchup(null); }}
+                onClick={() => { setCurrentView(item.key); if (item.key === 'matchups') { setSelectedMatchup(null); setMatchupsMonth(null); } }}
                 className={`group relative flex flex-1 flex-col items-center justify-center gap-1 transition disabled:opacity-30 ${active ? 'text-gold-300' : 'text-slate-600 hover:text-slate-400'}`}
               >
                 <span className={`absolute top-0 h-[2px] w-8 rounded-full bg-gold-sheen transition-opacity ${active ? 'opacity-100' : 'opacity-0'}`} />
