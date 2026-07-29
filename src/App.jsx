@@ -2673,18 +2673,25 @@ export default function FiveStarApp() {
                     </div>
                 </div>
 
-                {recapFor2(m) && (
-                    <Card className="bg-card-glow p-5">
-                        <h3 className="mb-3 flex items-center gap-2 text-sm font-extrabold uppercase tracking-wide text-white">
-                            <BookOpen size={15} className="text-gold-400"/> The recap
-                        </h3>
-                        <div className="space-y-3">
-                            {String(recapFor2(m)).split(/\n\s*\n/).filter(Boolean).map((para, i) => (
-                                <p key={i} className="text-sm leading-relaxed text-slate-300">{para}</p>
-                            ))}
-                        </div>
-                    </Card>
-                )}
+                {(() => {
+                    const rc = recapFor2(m);
+                    if (!rc) return null;
+                    return (
+                        <Card className="bg-card-glow p-5">
+                            <div className="mb-3 flex items-center gap-2">
+                                <BookOpen size={15} className="shrink-0 text-gold-400"/>
+                                <h3 className="text-base font-extrabold tracking-tightest text-white">
+                                    {rc.title || 'The recap'}
+                                </h3>
+                            </div>
+                            <div className="space-y-3">
+                                {String(rc.text).split(/\n\s*\n/).filter(Boolean).map((para, i) => (
+                                    <p key={i} className="text-sm leading-relaxed text-slate-300">{para}</p>
+                                ))}
+                            </div>
+                        </Card>
+                    );
+                })()}
 
                 <div className="flex items-center justify-between gap-2 px-1">
                     <span className="eyebrow">Team books</span>
