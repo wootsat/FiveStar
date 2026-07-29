@@ -2256,32 +2256,32 @@ export default function FiveStarApp() {
                               {!stock.isMyFranchise && stock.sector && stock.sector !== 'Unknown' && <span className="eyebrow">{stock.sector}</span>}
                           </div>
                           <div className="truncate text-xs text-slate-500">{stock.name}</div>
-                          {stock.lockedBy ? (
+                          {/* Ownership sits alongside the prices, not instead of
+                              them — the commissioner still has to price a ticker
+                              someone has claimed as a franchise stock. */}
+                          {stock.lockedBy && (
                               <div className="mt-0.5 flex items-center gap-1 text-[11px] font-bold text-slate-600">
                                   <Lock size={10}/> {stock.lockedBy.name}'s franchise
                               </div>
-                          ) : (
-                              <>
-                              <div className="mt-0.5 flex items-center gap-1 font-mono text-[11px] text-slate-600">
-                                  Month open ${stock.monthOpen.toFixed(2)}
-                                  {activeMembership?.isAdmin && (
-                                    <button onClick={()=>updateMonthOpenPrice(stock.id)} className="text-slate-600 transition hover:text-gold-400" aria-label={`Edit month open price for ${stock.id}`}>
-                                      <Edit2 size={10}/>
-                                    </button>
-                                  )}
-                              </div>
-                              {/* Season baseline is commissioner plumbing — players just see TOT. */}
+                          )}
+                          <div className="mt-0.5 flex items-center gap-1 font-mono text-[11px] text-slate-600">
+                              Month open ${stock.monthOpen.toFixed(2)}
                               {activeMembership?.isAdmin && (
-                                  <div className="flex items-center gap-1 font-mono text-[11px] text-slate-600">
-                                      {stock.seasonOpen > 0
-                                          ? `Season open $${stock.seasonOpen.toFixed(2)}`
-                                          : <span className="text-amber-500/80">Season open not set</span>}
-                                      <button onClick={()=>updateSeasonOpenPrice(stock.id)} className="text-slate-600 transition hover:text-gold-400" aria-label={`Edit season open price for ${stock.id}`}>
-                                        <Edit2 size={10}/>
-                                      </button>
-                                  </div>
+                                <button onClick={()=>updateMonthOpenPrice(stock.id)} className="text-slate-600 transition hover:text-gold-400" aria-label={`Edit month open price for ${stock.id}`}>
+                                  <Edit2 size={10}/>
+                                </button>
                               )}
-                              </>
+                          </div>
+                          {/* Season baseline is commissioner plumbing — players just see TOT. */}
+                          {activeMembership?.isAdmin && (
+                              <div className="flex items-center gap-1 font-mono text-[11px] text-slate-600">
+                                  {stock.seasonOpen > 0
+                                      ? `Season open $${stock.seasonOpen.toFixed(2)}`
+                                      : <span className="text-amber-500/80">Season open not set</span>}
+                                  <button onClick={()=>updateSeasonOpenPrice(stock.id)} className="text-slate-600 transition hover:text-gold-400" aria-label={`Edit season open price for ${stock.id}`}>
+                                    <Edit2 size={10}/>
+                                  </button>
+                              </div>
                           )}
                       </div>
 
