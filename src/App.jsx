@@ -9,7 +9,7 @@ import {
 import {
   getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, writeBatch, getDoc, query, where, deleteDoc, getDocs
 } from 'firebase/firestore';
-import { recapFor } from './recaps';
+import { recapForMatchup, monthHasRecap } from './recaps';
 
 // --- CONFIGURATION ---
 
@@ -2588,9 +2588,8 @@ export default function FiveStarApp() {
       const monthMatchups = isCurrent
           ? (activeLeague?.matchups || [])
           : (activeLeague?.schedule?.[viewedMonth] || []);
-      // Shipped in src/recaps.js; falls back to a Firestore-stored recap if one
-      // was ever written there.
-      const recap = recapFor(activeLeague?.id, viewedMonth) || activeLeague?.recaps?.[viewedMonth]?.text;
+      // Write-ups live per matchup in src/recaps.js, keyed by the two team names.
+      const recapFor2 = (mu) => recapForMatchup(activeLeague?.id, viewedMonth, mu?.p1Name, mu?.p2Name);
 
       // Bare month names keep the chips narrow enough to fit; the year is only
       // needed when a season straddles New Year.
@@ -2673,6 +2672,19 @@ export default function FiveStarApp() {
                         </div>
                     </div>
                 </div>
+
+                {recapFor2(m) && (
+                    <Card className="bg-card-glow p-5">
+                        <h3 className="mb-3 flex items-center gap-2 text-sm font-extrabold uppercase tracking-wide text-white">
+                            <BookOpen size={15} className="text-gold-400"/> The recap
+                        </h3>
+                        <div className="space-y-3">
+                            {String(recapFor2(m)).split(/\n\s*\n/).filter(Boolean).map((para, i) => (
+                                <p key={i} className="text-sm leading-relaxed text-slate-300">{para}</p>
+                            ))}
+                        </div>
+                    </Card>
+                )}
 
                 <div className="flex items-center justify-between gap-2 px-1">
                     <span className="eyebrow">Team books</span>
@@ -2763,28 +2775,12 @@ export default function FiveStarApp() {
                                   ? 'bg-gold-sheen text-ink-950'
                                   : 'bg-white/[0.05] text-slate-300 ring-1 ring-white/10 hover:bg-white/[0.10] hover:text-white'}`}>
                                 {monthChipLabel(m)}
-                                {(recapFor(activeLeague?.id, m) || activeLeague?.recaps?.[m]) && <BookOpen size={11} className={active ? '' : 'text-gold-400'} />}
+                                {monthHasRecap(activeLeague?.id, m) && <BookOpen size={11} className={active ? '' : 'text-gold-400'} />}
                                 {!scored && m !== activeLeague?.currentMonth && <span className={`h-1 w-1 rounded-full ${active ? 'bg-ink-950/40' : 'bg-slate-600'}`} />}
                             </button>
                         );
                     })}
                 </div>
-            )}
-
-            {recap && (
-                <Card className="bg-card-glow p-5">
-                    <div className="mb-3 flex items-center justify-between gap-3">
-                        <h3 className="flex items-center gap-2 text-sm font-extrabold uppercase tracking-wide text-white">
-                            <BookOpen size={15} className="text-gold-400"/> The recap
-                        </h3>
-                        <span className="eyebrow">{monthLabel(viewedMonth, true)}</span>
-                    </div>
-                    <div className="space-y-3">
-                        {String(recap).split(/\n\s*\n/).filter(Boolean).map((para, i) => (
-                            <p key={i} className="text-sm leading-relaxed text-slate-300">{para}</p>
-                        ))}
-                    </div>
-                </Card>
             )}
 
             {!monthMatchups.length ? (
@@ -2816,6 +2812,12 @@ export default function FiveStarApp() {
                                 <span className="h-px flex-1 hairline" />
                                 <span className="eyebrow text-gold-400/90">{m.type}</span>
                                 <span className="h-px flex-1 hairline" />
+                            </div>
+                        )}
+                        {recapFor2(m) && (
+                            <div className="mb-2 flex items-center justify-center gap-1 text-gold-400/90">
+                                <BookOpen size={11}/>
+                                <span className="eyebrow text-gold-400/90">Recap</span>
                             </div>
                         )}
                         <div className="flex items-center gap-2">
