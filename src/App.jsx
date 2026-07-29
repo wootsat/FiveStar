@@ -2108,7 +2108,9 @@ export default function FiveStarApp() {
                       <h3 className="flex items-center gap-2 text-sm font-extrabold uppercase tracking-wide text-white">
                           <Trophy size={15} className="text-gold-400"/> Leaderboard
                       </h3>
-                      <span className="eyebrow">Return</span>
+                      <span className="eyebrow shrink-0">
+                          {activeLeague?.currentMonth ? `Return for ${monthLabel(activeLeague.currentMonth)}` : 'Return'}
+                      </span>
                   </div>
                   {standings.length === 0 ? (
                       <p className="px-4 py-10 text-center text-sm text-slate-500">No players have joined yet.</p>
