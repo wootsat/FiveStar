@@ -15,6 +15,22 @@
 
 export const RECAPS = {
   '875351': {
+    '2026-05': [
+      {
+        teams: ['YOLO Kings', 'Investment Giants'],
+        title: 'Equal and Opposite',
+        text: `You could not have drawn this one up more neatly. YOLO Kings +5.61%, Investment Giants -5.59% — two teams the same distance from zero, pointing in opposite directions. In a league where a big month is about 5%, the Kings had one and the Giants had precisely its reflection.
+
+The Kings open the season 1-0, and by the standards of everything except one other result this month, +5.61% is a genuinely strong start. The Giants begin 0-1 and will want to file May under calibration.`,
+      },
+      {
+        teams: ['Omaha Lions', 'Wolf Lady'],
+        title: 'Omaha Breaks the Scoreboard',
+        text: `+52.54%. In a league where a big month is 5%, the Omaha Lions turned in roughly ten of them at once. This is the best single-month performance the league has on record and it isn't close — the kind of number you check twice, and then check again to see what on earth they were holding.
+
+Spare a thought for Wolf Lady, who posted +4.44%. In a normal month that is a solid, competitive result worth talking about. Here it lost by forty-eight points. Omaha start the season 1-0, Wolf Lady 0-1, and everyone else now has a benchmark they will probably never touch again.`,
+      },
+    ],
     '2026-06': [
       {
         teams: ['Omaha Lions', 'YOLO Kings'],
