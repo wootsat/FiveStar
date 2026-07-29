@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  TrendingUp, Trophy, Plus, Minus, RefreshCw, Shield, Crown, PlayCircle, Lock, LogOut, CheckCircle2, RotateCcw, Search, Save, DollarSign, Wallet, Users, BarChart3, PieChart, Settings, ArrowRight, Copy, Swords, ChevronLeft, Calendar, Edit2, Trash2, User, Upload, X, ArrowUp, ArrowDown, ArrowUpDown, Medal, Sparkles, Activity, CircleDollarSign, BookOpen
+  TrendingUp, Trophy, Plus, Minus, RefreshCw, Shield, Crown, PlayCircle, Lock, LogOut, CheckCircle2, RotateCcw, Search, Save, DollarSign, Wallet, Users, BarChart3, PieChart, Settings, ArrowRight, Copy, Swords, ChevronLeft, Calendar, Edit2, Trash2, User, Upload, X, ArrowUp, ArrowDown, ArrowUpDown, Medal, Sparkles, Activity, CircleDollarSign, BookOpen, TrendingDown
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
@@ -569,6 +569,7 @@ export default function FiveStarApp() {
   // Sorting State
   const [marketSortBy, setMarketSortBy] = useState('mtd'); // 'mtd', 'total', 'alpha'
   const [marketSortDir, setMarketSortDir] = useState('desc'); // 'asc' or 'desc'
+  const [marketMode, setMarketMode] = useState('list'); // 'list' or 'top5'
 
   // Measured so the Market's sticky filter bar parks exactly under the header.
   const headerRef = useRef(null);
@@ -898,7 +899,7 @@ export default function FiveStarApp() {
        const newData = {};
        trackedTickers.forEach(id => {
          const current = 150 + Math.random()*10;
-         newData[id] = { c: current, monthOpen: 145 };
+         newData[id] = { c: current, monthOpen: 145, pc: 148, dp: ((current - 148) / 148) * 100 };
        });
        setLiveMarketData(newData);
        return;
@@ -938,7 +939,14 @@ export default function FiveStarApp() {
         const existingOpen = Number(newData[ticker]?.monthOpen);
         const monthOpen = existingOpen > 0 ? existingOpen : (prevClose > 0 ? prevClose : price);
 
-        newData[ticker] = { c: price, monthOpen };
+        // `pc` is the previous close — keep it so we can show today's move.
+        // Finnhub also sends `dp` (day change %); prefer it when present.
+        newData[ticker] = {
+          c: price,
+          monthOpen,
+          pc: prevClose > 0 ? prevClose : null,
+          dp: Number.isFinite(Number(quoteData.dp)) ? Number(quoteData.dp) : null,
+        };
         hasUpdates = true;
       } catch (err) { console.error(`Error fetching ${ticker}:`, err); }
     }
@@ -2164,7 +2172,7 @@ export default function FiveStarApp() {
     // 1. Prepare Data
     // Only this league's pool is investable, not the global catalogue.
     const pool = activeLeague?.stockPool || [];
-    let stocksToRender = masterStocks.filter(s => pool.includes(s.id) && s.id.includes(stockSearch.toUpperCase())).map(stock => {
+    const poolStocks = masterStocks.filter(s => pool.includes(s.id)).map(stock => {
       const live = liveMarketData[stock.id];
       const price = live?.c || 0;
       
@@ -2178,15 +2186,23 @@ export default function FiveStarApp() {
       const seasonOpen = Number(activeLeague?.initialPrices?.[stock.id]) || 0;
       const totalChange = price > 0 && seasonOpen > 0 ? ((price - seasonOpen) / seasonOpen) * 100 : null;
 
+      // Today's move: Finnhub's own day-change percent, else derived from the
+      // previous close. Null until a quote with `pc`/`dp` has been fetched.
+      const prevClose = Number(live?.pc) || 0;
+      const dayChange = Number.isFinite(Number(live?.dp)) && live?.dp !== null
+          ? Number(live.dp)
+          : (price > 0 && prevClose > 0 ? ((price - prevClose) / prevClose) * 100 : null);
+
       const inRoster = activeMembership?.roster?.find((i) => i.id === stock.id);
       const owner = franchiseOwners[stock.id];
       const lockedBy = owner && owner.userId !== user?.uid ? owner : null;
       const isMyFranchise = owner && owner.userId === user?.uid;
 
-      return { ...stock, price, monthOpen, seasonOpen, mtdChange, totalChange, inRoster, lockedBy, isMyFranchise };
+      return { ...stock, price, monthOpen, seasonOpen, mtdChange, totalChange, dayChange, inRoster, lockedBy, isMyFranchise };
     });
 
-    // 2. Sort Data
+    // 2. Sort Data — search narrows the list, but never the Top 5s summary.
+    const stocksToRender = poolStocks.filter(s => s.id.includes(stockSearch.toUpperCase()));
     stocksToRender.sort((a, b) => {
       if (marketSortBy === 'alpha') {
           return marketSortDir === 'asc' ? a.id.localeCompare(b.id) : b.id.localeCompare(a.id);
@@ -2204,6 +2220,7 @@ export default function FiveStarApp() {
     const canDraft = activeMembership?.isPlayer && ['ready', 'active'].includes(activeLeague?.status);
 
     const toggleSort = (key, defaultDir) => {
+      setMarketMode('list');
       if (marketSortBy === key) setMarketSortDir(prev => prev === 'asc' ? 'desc' : 'asc');
       else { setMarketSortBy(key); setMarketSortDir(defaultDir); }
     };
@@ -2212,6 +2229,22 @@ export default function FiveStarApp() {
       { key: 'alpha', label: 'Ticker', dir: 'asc' },
       { key: 'mtd', label: 'MTD', dir: 'desc' },
       { key: 'total', label: 'Total', dir: 'desc' },
+    ];
+
+    // Ranked over the whole pool — a ticker with no figure for a period is left
+    // out of that board rather than ranked as 0%.
+    const leaderboard = (field, best) => poolStocks
+      .filter(s => s[field] !== null && s[field] !== undefined)
+      .sort((a, b) => best ? b[field] - a[field] : a[field] - b[field])
+      .slice(0, 5);
+
+    const BOARDS = [
+      { title: 'Best today',        field: 'dayChange',   best: true },
+      { title: 'Worst today',       field: 'dayChange',   best: false },
+      { title: 'Best this month',   field: 'mtdChange',   best: true },
+      { title: 'Worst this month',  field: 'mtdChange',   best: false },
+      { title: 'Best this season',  field: 'totalChange', best: true },
+      { title: 'Worst this season', field: 'totalChange', best: false },
     ];
 
     return (
@@ -2224,7 +2257,7 @@ export default function FiveStarApp() {
 
             <div className="flex gap-1 rounded-xl bg-black/30 p-1 ring-1 ring-white/[0.06]">
               {SORTS.map(s => {
-                const active = marketSortBy === s.key;
+                const active = marketMode === 'list' && marketSortBy === s.key;
                 return (
                   <button key={s.key} onClick={() => toggleSort(s.key, s.dir)}
                     className={`flex flex-1 items-center justify-center gap-1 rounded-lg py-1.5 text-xs font-bold transition ${active ? 'bg-white/[0.10] text-white shadow-sm' : 'text-slate-500 hover:text-slate-300'}`}
@@ -2236,10 +2269,55 @@ export default function FiveStarApp() {
                   </button>
                 );
               })}
+              <button onClick={() => setMarketMode('top5')}
+                className={`flex flex-1 items-center justify-center gap-1 rounded-lg py-1.5 text-xs font-bold transition ${marketMode === 'top5' ? 'bg-white/[0.10] text-white shadow-sm' : 'text-slate-500 hover:text-slate-300'}`}
+              >
+                Top 5s
+                <Trophy size={11} className={marketMode === 'top5' ? 'text-gold-400' : 'opacity-40'}/>
+              </button>
             </div>
           </div>
 
-          {stocksToRender.length === 0 ? (
+          {marketMode === 'top5' ? (
+            poolStocks.length === 0 ? (
+              <EmptyState icon={Trophy} title="Nothing to rank yet" body="The commissioner hasn't added any stocks to the pool." />
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {BOARDS.map(board => {
+                  const rows = leaderboard(board.field, board.best);
+                  return (
+                    <div key={board.title} className="surface overflow-hidden">
+                      <div className="flex items-center justify-between border-b border-white/[0.07] px-3.5 py-2.5">
+                        <h3 className="text-xs font-extrabold uppercase tracking-wide text-white">{board.title}</h3>
+                        {board.best
+                          ? <TrendingUp size={13} className="text-gain"/>
+                          : <TrendingDown size={13} className="text-loss"/>}
+                      </div>
+                      {rows.length === 0 ? (
+                        <p className="px-3.5 py-5 text-center text-xs text-slate-600">
+                          {board.field === 'dayChange'
+                            ? 'Waiting on today\'s quotes.'
+                            : board.field === 'totalChange'
+                            ? 'No season opening prices set yet.'
+                            : 'No month opening prices yet.'}
+                        </p>
+                      ) : (
+                        <div className="divide-y divide-white/[0.05]">
+                          {rows.map((s, i) => (
+                            <div key={s.id} className="flex items-center gap-2.5 px-3.5 py-2">
+                              <span className="w-3 shrink-0 font-mono text-[11px] font-bold text-slate-600">{i + 1}</span>
+                              <span className="min-w-0 flex-1 truncate font-mono text-sm font-bold text-white">{s.id}</span>
+                              <Pct value={s[board.field]} className="shrink-0 text-xs" />
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )
+          ) : stocksToRender.length === 0 ? (
             <EmptyState icon={BarChart3} title="No tickers found" body={stockSearch ? `Nothing in the pool matches "${stockSearch}".` : 'The commissioner has not added any stocks yet.'} />
           ) : (
           <div className="surface divide-y divide-white/[0.05] overflow-hidden">
