@@ -1974,7 +1974,6 @@ export default function FiveStarApp() {
 
   const renderLeagueHub = () => {
       const standings = [...leaguePlayers].filter(p => p.isPlayer).sort((a,b) => b.wins - a.wins || b.points - a.points);
-      const status = statusMeta(activeLeague?.status);
 
       // Colour is keyed to a stable player order, never to standings position.
       const charted = [...leaguePlayers].filter(p => p.isPlayer).sort((a, b) => a.userId.localeCompare(b.userId));
@@ -2079,21 +2078,16 @@ export default function FiveStarApp() {
           ) : (
               <>
               <div className="surface relative overflow-hidden bg-card-glow p-5">
-                  <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                          <div className="eyebrow">Season standings</div>
-                          <h2 className="mt-1 truncate text-2xl font-extrabold tracking-tightest text-white">{activeLeague?.name || 'League'}</h2>
-                      </div>
-                      <span className={`${status.chip} shrink-0`}>
-                          {status.live && <span className="h-1.5 w-1.5 animate-ticker-pulse rounded-full bg-current" />}
-                          {status.label}
-                      </span>
+                  <div className="min-w-0">
+                      <div className="eyebrow">Season standings</div>
+                      <h2 className="mt-1 truncate text-2xl font-extrabold tracking-tightest text-white">{activeLeague?.name || 'League'}</h2>
                   </div>
-                  <div className="mt-5 grid grid-cols-3 gap-2">
+                  {/* League status and invite code live on the Admin tab — players
+                      don't need either here. */}
+                  <div className="mt-5 grid grid-cols-2 gap-2">
                       {[
                           { label: 'Month', value: monthLabel(activeLeague?.currentMonth, true) },
                           { label: 'Players', value: standings.length },
-                          { label: 'Code', value: activeMembership.leagueId },
                       ].map(s => (
                           <div key={s.label} className="surface-sunken px-3 py-2.5 text-center">
                               <div className="eyebrow">{s.label}</div>
