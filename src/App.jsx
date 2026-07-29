@@ -2114,6 +2114,28 @@ export default function FiveStarApp() {
               <div className="surface p-4">
                   <div className="mb-3 flex items-end justify-between gap-3">
                       <h3 className="flex items-center gap-2 text-sm font-extrabold uppercase tracking-wide text-white">
+                          <Activity size={15} className="text-gold-400"/> This month's race
+                      </h3>
+                      <span className="eyebrow">{monthLabel(activeLeague?.currentMonth)}</span>
+                  </div>
+                  {monthSeries.length === 0 || !hasMonthData ? (
+                      <p className="px-1 py-8 text-center text-sm text-slate-500">
+                          No daily readings yet. They start accumulating once the commissioner opens the month.
+                      </p>
+                  ) : (
+                      <PortfolioChart
+                          series={monthSeries}
+                          labels={monthLabels}
+                          format="percent"
+                          axisLabel="Day"
+                          emptyMessage="No daily returns recorded for this month yet."
+                      />
+                  )}
+              </div>
+
+              <div className="surface p-4">
+                  <div className="mb-3 flex items-end justify-between gap-3">
+                      <h3 className="flex items-center gap-2 text-sm font-extrabold uppercase tracking-wide text-white">
                           <Trophy size={15} className="text-gold-400"/> Chase for the Terminator
                       </h3>
                       <span className="eyebrow">Season</span>
@@ -2130,28 +2152,6 @@ export default function FiveStarApp() {
                           format="money"
                           axisLabel="Week"
                           emptyMessage="Not enough of the season has been played yet."
-                      />
-                  )}
-              </div>
-
-              <div className="surface p-4">
-                  <div className="mb-3 flex items-end justify-between gap-3">
-                      <h3 className="flex items-center gap-2 text-sm font-extrabold uppercase tracking-wide text-white">
-                          <Activity size={15} className="text-gold-400"/> This month's race
-                      </h3>
-                      <span className="eyebrow">{monthLabel(activeLeague?.currentMonth)}</span>
-                  </div>
-                  {monthSeries.length === 0 || !hasMonthData ? (
-                      <p className="px-1 py-8 text-center text-sm text-slate-500">
-                          No daily readings yet. They start accumulating once the commissioner opens the month.
-                      </p>
-                  ) : (
-                      <PortfolioChart
-                          series={monthSeries}
-                          labels={monthLabels}
-                          format="percent"
-                          axisLabel="Day"
-                          emptyMessage="No daily returns recorded for this month yet."
                       />
                   )}
               </div>
@@ -2575,6 +2575,17 @@ export default function FiveStarApp() {
         // A scored month has a winner; an open one only has someone in front.
         const isFinal = !!m.scored;
 
+        // A closed month has its books frozen at close. Read those rather than
+        // live rosters and prices, which have moved on since.
+        const snap = activeLeague?.monthSnapshots?.[viewedMonth];
+        const priceIn = (id) => snap ? (Number(snap.endPrices?.[id]) || 0) : priceOf(id);
+        const changeIn = (id) => {
+            if (!snap) return stockMonthChange(id);
+            const open = Number(snap.startPrices?.[id]);
+            const close = Number(snap.endPrices?.[id]);
+            return open > 0 && close > 0 ? ((close - open) / open) * 100 : null;
+        };
+
         return (
             <div className="animate-fade-up space-y-4">
                 <button onClick={() => closeOverlay(() => setSelectedMatchup(null))} className="flex items-center gap-1.5 text-sm font-bold text-slate-500 transition hover:text-white">
@@ -2629,22 +2640,29 @@ export default function FiveStarApp() {
                     </div>
                 </div>
 
+                <div className="flex items-center justify-between gap-2 px-1">
+                    <span className="eyebrow">Team books</span>
+                    <span className="eyebrow">{snap ? 'As of month close' : 'Live'}</span>
+                </div>
+
                 {/* Both books side by side so the two teams read as a comparison
                     rather than two unrelated lists. */}
                 <div className="grid grid-cols-2 gap-2">
                     {[m.p1, m.p2].filter(uid => uid && uid !== 'BYE').map(uid => {
                         const player = leaguePlayers.find(p => p.userId === uid);
-                        if (!player) return null;
-                        const roster = player.roster || [];
-                        const cash = parseFloat(player.cash) || 0;
-                        const total = portfolioValueOf(player);
+                        const frozen = snap?.teams?.[uid];
+                        if (!player && !frozen) return null;
+                        const name = frozen?.name || player?.name || 'Player';
+                        const roster = frozen?.roster || player?.roster || [];
+                        const cash = frozen ? (Number(frozen.cash) || 0) : (parseFloat(player?.cash) || 0);
+                        const total = frozen ? (Number(frozen.endValue) || 0) : portfolioValueOf(player);
                         const isWinner = m.scored && (uid === m.p1 ? m.p1Score > m.p2Score : m.p2Score > m.p1Score);
                         return (
                             <div key={uid} className={`surface flex flex-col overflow-hidden ${isWinner ? 'ring-gold-400/40' : ''}`}>
                                 <div className="border-b border-white/[0.07] px-3 py-2.5">
                                     <div className="flex items-center gap-1.5">
-                                        <Avatar url={player.avatar} name={player.name} size="sm" />
-                                        <span className="min-w-0 flex-1 truncate text-xs font-bold text-white">{player.name}</span>
+                                        <Avatar url={player?.avatar} name={name} size="sm" />
+                                        <span className="min-w-0 flex-1 truncate text-xs font-bold text-white">{name}</span>
                                         {isWinner && <Trophy size={13} className="shrink-0 text-gold-400" aria-label="Winner" />}
                                     </div>
                                     <div className="mt-1.5">
@@ -2658,14 +2676,14 @@ export default function FiveStarApp() {
                                 ) : (
                                     <div className="flex-1 divide-y divide-white/[0.05]">
                                         {roster.map(item => {
-                                            const change = stockMonthChange(item.id);
-                                            const price = priceOf(item.id);
+                                            const change = changeIn(item.id);
+                                            const price = priceIn(item.id);
                                             const value = (parseFloat(item.shares) || 0) * price;
                                             return (
                                                 <div key={item.id} className="px-3 py-2">
                                                     <div className="flex items-center gap-1">
                                                         <span className="min-w-0 flex-1 truncate font-mono text-xs font-bold text-white">{item.id}</span>
-                                                        {(player.franchiseStocks || []).includes(item.id) && <span className="eyebrow shrink-0 text-gold-400">F</span>}
+                                                        {(player?.franchiseStocks || []).includes(item.id) && <span className="eyebrow shrink-0 text-gold-400">F</span>}
                                                     </div>
                                                     <div className="truncate font-mono text-[10px] text-slate-500">
                                                         {item.shares} @ ${price.toFixed(2)}
