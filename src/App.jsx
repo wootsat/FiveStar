@@ -1242,15 +1242,32 @@ export default function FiveStarApp() {
       await updateDoc(docRef, { roster });
   };
 
-  const updateBasePrice = async (stockId) => {
+  // `startingPrices` — the opening price on the first trading day of the current
+  // month. Drives MTD.
+  const updateMonthOpenPrice = async (stockId) => {
       if (!activeMembership?.isAdmin) return;
-      const currentStartPrice = activeLeague.startingPrices?.[stockId] || 0;
-      const newVal = prompt(`Update Base Price for ${stockId}`, currentStartPrice);
+      const current = activeLeague.startingPrices?.[stockId] || '';
+      const newVal = prompt(`${stockId} — opening price for ${monthLabel(activeLeague.currentMonth)}`, current);
       if (newVal === null) return;
       const price = parseFloat(newVal);
-      if (isNaN(price)) return alert("Invalid Price");
-      const newStartingPrices = { ...activeLeague.startingPrices, [stockId]: price };
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), { startingPrices: newStartingPrices });
+      if (isNaN(price) || price <= 0) return alert("Enter a price greater than zero.");
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), {
+          [`startingPrices.${stockId}`]: price,
+      });
+  };
+
+  // `initialPrices` — the opening price on the first trading day of the league's
+  // first month. Drives TOT, and never changes once the season is under way.
+  const updateSeasonOpenPrice = async (stockId) => {
+      if (!activeMembership?.isAdmin) return;
+      const current = activeLeague.initialPrices?.[stockId] || '';
+      const newVal = prompt(`${stockId} — opening price at the start of the season (${monthLabel(activeLeague.seasonStart)})`, current);
+      if (newVal === null) return;
+      const price = parseFloat(newVal);
+      if (isNaN(price) || price <= 0) return alert("Enter a price greater than zero.");
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), {
+          [`initialPrices.${stockId}`]: price,
+      });
   };
 
   // --- Calculations ---
@@ -1420,15 +1437,25 @@ export default function FiveStarApp() {
       if (missing.length > 0) {
           const proceed = confirm(
               `No price available for ${missing.join(', ')} — the market data feed didn't return one.\n\n` +
-              `Open the month anyway? Those tickers will have no base price until you set one from the Market tab (pencil icon).`
+              `Open the month anyway? Those tickers will have no month-open price until you set one from the Market tab (pencil icon).`
           );
           if (!proceed) return;
       }
 
       const leagueUpdate = { status: 'active', startingPrices: starts };
-      if (!activeLeague.initialPrices || Object.keys(activeLeague.initialPrices).length === 0) {
-          leagueUpdate.initialPrices = starts;
-      }
+
+      // Season-open prices are per-ticker and set once. Fill in any ticker that
+      // doesn't have one yet — a stock added in August gets its August open,
+      // which the commissioner can correct from Admin if it should be earlier.
+      const seasonOpens = { ...(activeLeague.initialPrices || {}) };
+      let addedSeasonOpens = false;
+      Object.entries(starts).forEach(([id, price]) => {
+          if (!(Number(seasonOpens[id]) > 0) && price > 0) {
+              seasonOpens[id] = price;
+              addedSeasonOpens = true;
+          }
+      });
+      if (addedSeasonOpens) leagueUpdate.initialPrices = seasonOpens;
 
       const batch = writeBatch(db);
       batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), leagueUpdate);
@@ -2141,18 +2168,22 @@ export default function FiveStarApp() {
       const live = liveMarketData[stock.id];
       const price = live?.c || 0;
       
-      const mtdBase = activeLeague?.startingPrices?.[stock.id] || live?.monthOpen || price;
-      const mtdChange = price && mtdBase ? ((price - mtdBase) / mtdBase) * 100 : 0;
-      
-      const initialBase = activeLeague?.initialPrices?.[stock.id] || mtdBase; 
-      const totalChange = price && initialBase ? ((price - initialBase) / initialBase) * 100 : 0;
+      // Month open: the price at the first opening bell of the current month.
+      const monthOpen = Number(activeLeague?.startingPrices?.[stock.id]) || Number(live?.monthOpen) || price;
+      const mtdChange = price > 0 && monthOpen > 0 ? ((price - monthOpen) / monthOpen) * 100 : null;
+
+      // Season open: the price at the first opening bell of the league's first
+      // month. No guessed fallback — an unknown baseline reads as "—" rather
+      // than quietly repeating MTD.
+      const seasonOpen = Number(activeLeague?.initialPrices?.[stock.id]) || 0;
+      const totalChange = price > 0 && seasonOpen > 0 ? ((price - seasonOpen) / seasonOpen) * 100 : null;
 
       const inRoster = activeMembership?.roster?.find((i) => i.id === stock.id);
       const owner = franchiseOwners[stock.id];
       const lockedBy = owner && owner.userId !== user?.uid ? owner : null;
       const isMyFranchise = owner && owner.userId === user?.uid;
 
-      return { ...stock, price, mtdBase, mtdChange, totalChange, inRoster, lockedBy, isMyFranchise };
+      return { ...stock, price, monthOpen, seasonOpen, mtdChange, totalChange, inRoster, lockedBy, isMyFranchise };
     });
 
     // 2. Sort Data
@@ -2162,6 +2193,11 @@ export default function FiveStarApp() {
       }
       const valA = marketSortBy === 'mtd' ? a.mtdChange : a.totalChange;
       const valB = marketSortBy === 'mtd' ? b.mtdChange : b.totalChange;
+      // Tickers with no baseline have no figure to rank — park them at the
+      // bottom either way rather than letting them sort as 0%.
+      if (valA === null && valB === null) return a.id.localeCompare(b.id);
+      if (valA === null) return 1;
+      if (valB === null) return -1;
       return marketSortDir === 'asc' ? valA - valB : valB - valA;
     });
 
@@ -2225,14 +2261,27 @@ export default function FiveStarApp() {
                                   <Lock size={10}/> {stock.lockedBy.name}'s franchise
                               </div>
                           ) : (
+                              <>
                               <div className="mt-0.5 flex items-center gap-1 font-mono text-[11px] text-slate-600">
-                                  Base ${stock.mtdBase.toFixed(2)}
+                                  Month open ${stock.monthOpen.toFixed(2)}
                                   {activeMembership?.isAdmin && (
-                                    <button onClick={()=>updateBasePrice(stock.id)} className="text-slate-600 transition hover:text-gold-400" aria-label={`Edit base price for ${stock.id}`}>
+                                    <button onClick={()=>updateMonthOpenPrice(stock.id)} className="text-slate-600 transition hover:text-gold-400" aria-label={`Edit month open price for ${stock.id}`}>
                                       <Edit2 size={10}/>
                                     </button>
                                   )}
                               </div>
+                              {/* Season baseline is commissioner plumbing — players just see TOT. */}
+                              {activeMembership?.isAdmin && (
+                                  <div className="flex items-center gap-1 font-mono text-[11px] text-slate-600">
+                                      {stock.seasonOpen > 0
+                                          ? `Season open $${stock.seasonOpen.toFixed(2)}`
+                                          : <span className="text-amber-500/80">Season open not set</span>}
+                                      <button onClick={()=>updateSeasonOpenPrice(stock.id)} className="text-slate-600 transition hover:text-gold-400" aria-label={`Edit season open price for ${stock.id}`}>
+                                        <Edit2 size={10}/>
+                                      </button>
+                                  </div>
+                              )}
+                              </>
                           )}
                       </div>
 
@@ -2243,11 +2292,15 @@ export default function FiveStarApp() {
                               <div className="mt-1 flex flex-col items-end gap-0.5">
                                   <div className="flex items-center gap-1.5">
                                       <span className="eyebrow">MTD</span>
-                                      <Pct value={stock.mtdChange} className="text-[11px]" />
+                                      {stock.mtdChange === null
+                                          ? <span className="font-mono text-[11px] text-slate-600">—</span>
+                                          : <Pct value={stock.mtdChange} className="text-[11px]" />}
                                   </div>
                                   <div className="flex items-center gap-1.5">
                                       <span className="eyebrow">TOT</span>
-                                      <Pct value={stock.totalChange} className="text-[11px]" />
+                                      {stock.totalChange === null
+                                          ? <span className="font-mono text-[11px] text-slate-600">—</span>
+                                          : <Pct value={stock.totalChange} className="text-[11px]" />}
                                   </div>
                               </div>
                             </>
@@ -2855,6 +2908,43 @@ export default function FiveStarApp() {
                       <p className="text-xs text-slate-500">Seeded automatically from the standings at the end of month 11.</p>
                   </div>
               </div>
+          </Panel>
+
+          <Panel icon={CircleDollarSign} title="Season opening prices" accent="purple"
+            description={`Each ticker's price at the first opening bell of ${monthLabel(activeLeague?.seasonStart)}. This is the baseline for TOT — set it once. Players don't see these; they only see the resulting percentage.`}>
+              {(activeLeague?.stockPool || []).length === 0 ? (
+                  <p className="text-xs text-slate-500">Add tickers to the pool first.</p>
+              ) : (
+                  <div className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
+                      {(activeLeague.stockPool).map(id => {
+                          const seasonOpen = Number(activeLeague?.initialPrices?.[id]) || 0;
+                          return (
+                              <div key={id} className="surface-sunken flex items-center justify-between gap-2 px-3 py-2">
+                                  <div className="min-w-0">
+                                      <span className="font-mono text-sm font-bold text-white">{id}</span>
+                                      {seasonOpen <= 0 && <span className="ml-2 text-[10px] font-bold uppercase tracking-wide text-amber-500/80">not set</span>}
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                      <span className="font-mono text-xs text-slate-500">$</span>
+                                      <input
+                                          type="number" step="0.01" min="0"
+                                          defaultValue={seasonOpen > 0 ? seasonOpen : ''}
+                                          placeholder="0.00"
+                                          onBlur={(e) => {
+                                              const v = parseFloat(e.target.value);
+                                              if (isNaN(v) || v <= 0 || v === seasonOpen) return;
+                                              updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), {
+                                                  [`initialPrices.${id}`]: v,
+                                              });
+                                          }}
+                                          className="field-sm w-28 py-1.5 text-right font-mono"
+                                      />
+                                  </div>
+                              </div>
+                          );
+                      })}
+                  </div>
+              )}
           </Panel>
 
           <Panel icon={BarChart3} title="Stock pool" accent="blue" description="The tickers this league can invest in. Edit it whenever — usually between months.">
