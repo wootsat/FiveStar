@@ -111,6 +111,21 @@ const currentMonthKey = () => {
 const dayKey = (date = new Date()) =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 
+const addDays = (day, n) => {
+  const [year, month, date] = String(day).split('-').map(Number);
+  return dayKey(new Date(year, month - 1, date + n));
+};
+
+const lastDayOfMonth = (mKey) => {
+  const { year, month } = parseMonth(mKey);
+  return `${mKey}-${String(new Date(year, month, 0).getDate()).padStart(2, '0')}`;
+};
+
+const shortDayLabel = (day) => {
+  const { month } = parseMonth(day);
+  return `${MONTH_NAMES[month - 1]?.slice(0, 3)} ${Number(String(day).slice(8))}`;
+};
+
 // Every calendar day of a month, stopping at `upTo` when the month is still running.
 const daysOfMonth = (mKey, upTo) => {
   const { year, month } = parseMonth(mKey);
@@ -138,7 +153,9 @@ const fmtFullMoney = (v) => `$${Number(v).toLocaleString(undefined, { maximumFra
 
 // `labels` are the x-axis tick captions, one per point. `format` switches the
 // y-axis and tooltip between dollars and percentages.
-const PortfolioChart = ({ series, labels, format = 'money', axisLabel = 'Point', emptyMessage }) => {
+// `ticks` optionally pins the x-axis captions to specific points (e.g. month
+// boundaries on a weekly series); without it, captions are spaced evenly.
+const PortfolioChart = ({ series, labels, ticks, format = 'money', axisLabel = 'Point', emptyMessage }) => {
   const [hover, setHover] = useState(null);
   const [showTable, setShowTable] = useState(false);
 
@@ -174,9 +191,17 @@ const PortfolioChart = ({ series, labels, format = 'money', axisLabel = 'Point',
 
   const gridValues = [0, 0.5, 1].map(t => yMin + t * (yMax - yMin));
 
-  // Show roughly four date ticks, always including the first and last day.
-  const tickStep = Math.max(1, Math.ceil(days.length / 4));
-  const tickIndexes = days.map((_, i) => i).filter(i => i % tickStep === 0 || i === days.length - 1);
+  // Pinned ticks when supplied; otherwise roughly four evenly spaced captions,
+  // always including the first and last point.
+  const tickList = ticks?.length
+    ? ticks.filter(t => t.i >= 0 && t.i < days.length)
+    : (() => {
+        const step = Math.max(1, Math.ceil(days.length / 4));
+        return days
+          .map((_, i) => i)
+          .filter(i => i % step === 0 || i === days.length - 1)
+          .map(i => ({ i, label: days[i] }));
+      })();
 
   const pathFor = (points) => {
     let d = '';
@@ -258,9 +283,9 @@ const PortfolioChart = ({ series, labels, format = 'money', axisLabel = 'Point',
           </g>
         ))}
 
-        {tickIndexes.map(i => (
-          <text key={i} x={x(i)} y={H - 6} textAnchor="middle" fontSize="8" fill="rgba(148,163,184,0.75)" fontFamily="ui-monospace, monospace">
-            {days[i]}
+        {tickList.map(t => (
+          <text key={t.i} x={x(t.i)} y={H - 6} textAnchor="middle" fontSize="8" fill="rgba(148,163,184,0.75)" fontFamily="ui-monospace, monospace">
+            {t.label}
           </text>
         ))}
 
@@ -612,6 +637,57 @@ export default function FiveStarApp() {
     localStorage.setItem('fivestar_view', currentView);
   }, [currentView]);
 
+  // --- Browser back navigation ---------------------------------------------
+  // Each tab and each overlay gets its own history entry, so Back steps through
+  // the app instead of leaving it. Overlays close by calling history.back(),
+  // which keeps the stack and the UI from drifting apart.
+
+  const pushScreen = (next) => {
+    try { window.history.pushState({ fivestar: next }, ''); } catch { /* history unavailable */ }
+  };
+  const replaceScreen = (next) => {
+    try { window.history.replaceState({ fivestar: next }, ''); } catch { /* history unavailable */ }
+  };
+
+  const navigateTo = (view) => {
+    if (view === currentView) return;
+    setSelectedMatchup(null);
+    if (view === 'matchups') setMatchupsMonth(null);
+    setCurrentView(view);
+    pushScreen({ view, overlay: null });
+  };
+
+  const openOverlay = (name, apply) => {
+    apply?.();
+    pushScreen({ view: currentView, overlay: name });
+  };
+
+  // Prefer unwinding history so the entry is consumed; fall back to closing
+  // directly if this overlay somehow isn't the current entry.
+  const closeOverlay = (fallback) => {
+    if (window.history.state?.fivestar?.overlay) window.history.back();
+    else fallback?.();
+  };
+
+  useEffect(() => {
+    if (!window.history.state?.fivestar) {
+      replaceScreen({ view: currentView, overlay: null });
+    }
+    const onPop = (e) => {
+      const screen = e.state?.fivestar;
+      const view = screen?.view || 'dashboard';
+      const overlay = screen?.overlay || null;
+      setCurrentView(view);
+      if (overlay !== 'matchup') setSelectedMatchup(null);
+      if (overlay !== 'profile') setShowProfile(false);
+      if (overlay !== 'leagues') setShowLeagueCreator(false);
+      if (overlay !== 'avatar') setEnlargedAvatar(null);
+      if (overlay !== 'backfill') setBackfillMonth(null);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
   // Suggest installing to the home screen — mobile browsers only, once, and
   // never when the app is already running standalone.
   useEffect(() => {
@@ -943,6 +1019,9 @@ export default function FiveStarApp() {
           setActiveMembership(membershipData);
           closeOnboarding();
           setCurrentView('admin');
+          // Overwrite the modal's history entry rather than leaving a dead one
+          // behind, so Back goes to the screen before the modal opened.
+          replaceScreen({ view: 'admin', overlay: null });
       } catch (err) { alert(err.message); }
       setIsProcessing(false);
   };
@@ -977,6 +1056,7 @@ export default function FiveStarApp() {
           setActiveMembership(membershipData);
           setJoinLeagueId('');
           closeOnboarding();
+          replaceScreen({ view: currentView, overlay: null });
       } catch (err) { alert(err.message); }
       setIsProcessing(false);
   };
@@ -1047,7 +1127,7 @@ export default function FiveStarApp() {
           name: editingName,
           avatar: editingAvatar || activeMembership.avatar || ''
       });
-      setShowProfile(false);
+      closeOverlay(() => setShowProfile(false));
   };
 
   const handleDeleteLeague = async () => {
@@ -1458,7 +1538,7 @@ export default function FiveStarApp() {
           scores[`${i}_p2`] = m.p2Score ?? '';
       });
       setBackfillScores(scores);
-      setBackfillMonth(month);
+      openOverlay('backfill', () => setBackfillMonth(month));
   };
 
   const saveBackfill = async () => {
@@ -1481,7 +1561,7 @@ export default function FiveStarApp() {
           if (backfillMonth === activeLeague.currentMonth) leagueUpdate.matchups = monthMatchups;
           await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), leagueUpdate);
           await recomputeStandings(newSchedule);
-          setBackfillMonth(null);
+          closeOverlay(() => setBackfillMonth(null));
       } catch (err) { alert(err.message); }
       setIsProcessing(false);
   };
@@ -1617,7 +1697,7 @@ export default function FiveStarApp() {
       const shell = (children) => (
           <div className={`surface p-6 ${inModal ? 'shadow-lift' : 'animate-fade-up'}`}>
               {inModal && (
-                  <button onClick={closeOnboarding} aria-label="Close" className="float-right -mr-1 -mt-1 text-slate-500 transition hover:text-white">
+                  <button onClick={() => closeOverlay(closeOnboarding)} aria-label="Close" className="float-right -mr-1 -mt-1 text-slate-500 transition hover:text-white">
                       <X size={20}/>
                   </button>
               )}
@@ -1833,26 +1913,62 @@ export default function FiveStarApp() {
       const charted = [...leaguePlayers].filter(p => p.isPlayer).sort((a, b) => a.userId.localeCompare(b.userId));
       const palette = (i) => SERIES_COLORS[i];
 
-      // --- Season chart: portfolio value at each month's close -------------
-      const seasonMonths2 = allMonths.filter(m => !activeLeague?.currentMonth || m <= activeLeague.currentMonth);
+      // --- Season chart: one point per week, x-axis captioned by month ------
+      const today = dayKey();
+      const seasonEndDay = activeLeague?.playoffMonth ? lastDayOfMonth(activeLeague.playoffMonth) : today;
 
-      const valueAtMonth = (p, m) => {
-          const closed = Number(activeLeague?.monthSnapshots?.[m]?.teams?.[p.userId]?.endValue);
-          if (closed > 0) return closed;
-          if (m === activeLeague?.currentMonth) return portfolioValueOf(p);
-          // Months closed before snapshots existed: use that month's last daily reading.
-          const daysIn = Object.keys(p.valueHistory || {}).filter(d => d.startsWith(`${m}-`)).sort();
-          if (daysIn.length) return Number(p.valueHistory[daysIn[daysIn.length - 1]]);
-          return null;
+      const weekDays = [];
+      if (activeLeague?.seasonStart) {
+          let cursor = `${activeLeague.seasonStart}-01`;
+          const stop = today < seasonEndDay ? today : seasonEndDay;
+          while (cursor <= stop && weekDays.length < 80) {
+              weekDays.push(cursor);
+              cursor = addDays(cursor, 7);
+          }
+          // Keep the line current when today isn't itself a checkpoint.
+          if (weekDays.length && weekDays[weekDays.length - 1] !== stop) weekDays.push(stop);
+      }
+
+      // Every value we know for a player, keyed by day: the daily readings plus
+      // each closed month's final value pinned to that month's last day.
+      const knownValues = (p) => {
+          const map = {};
+          Object.entries(p.valueHistory || {}).forEach(([d, v]) => {
+              if (Number(v) > 0) map[d] = Number(v);
+          });
+          Object.entries(activeLeague?.monthSnapshots || {}).forEach(([m, snap]) => {
+              const v = Number(snap?.teams?.[p.userId]?.endValue);
+              if (v > 0) map[lastDayOfMonth(m)] = v;
+          });
+          return map;
       };
 
-      const seasonSeries = charted.slice(0, SERIES_COLORS.length).map((p, i) => ({
-          id: p.userId,
-          name: p.name || 'Player',
-          color: palette(i),
-          points: seasonMonths2.map(m => valueAtMonth(p, m)),
-      }));
-      const seasonLabels = seasonMonths2.map(m => MONTH_NAMES[parseMonth(m).month - 1]?.slice(0, 3) || '—');
+      const seasonSeries = charted.slice(0, SERIES_COLORS.length).map((p, i) => {
+          const known = knownValues(p);
+          const dates = Object.keys(known).sort();
+          let cursor = 0;
+          let carried = null;
+          const points = weekDays.map(w => {
+              while (cursor < dates.length && dates[cursor] <= w) carried = known[dates[cursor++]];
+              return carried; // most recent known value at or before this week
+          });
+          // The final point reflects the live portfolio rather than a stale reading.
+          if (points.length && p.isPlayer) {
+              const live = portfolioValueOf(p);
+              if (live > 0) points[points.length - 1] = live;
+          }
+          return { id: p.userId, name: p.name || 'Player', color: palette(i), points };
+      });
+
+      const seasonLabels = weekDays.map(shortDayLabel);
+      // One caption per month, placed on that month's first weekly point.
+      const seasonTicks = [];
+      weekDays.forEach((w, i) => {
+          const m = w.slice(0, 7);
+          if (!seasonTicks.some(t => t.month === m)) {
+              seasonTicks.push({ i, month: m, label: MONTH_NAMES[parseMonth(m).month - 1]?.slice(0, 3) || '' });
+          }
+      });
       const hasSeasonData = seasonSeries.some(s => s.points.filter(v => v !== null).length > 1);
 
       // --- Month chart: the % return that decides each head-to-head --------
@@ -1883,7 +1999,7 @@ export default function FiveStarApp() {
                   </button>
                   );
               })}
-              <button onClick={() => setShowLeagueCreator(true)} aria-label="Add league"
+              <button onClick={() => openOverlay('leagues', () => setShowLeagueCreator(true))} aria-label="Add league"
                 className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-white/[0.05] text-slate-400 ring-1 ring-white/10 transition hover:bg-white/[0.09] hover:text-gold-300">
                   <Plus size={16}/>
               </button>
@@ -1891,7 +2007,7 @@ export default function FiveStarApp() {
 
           {!activeMembership ? (
               <EmptyState icon={Trophy} title="No leagues yet" body="Create a league and invite your friends, or join one with a six-digit code.">
-                  <button onClick={() => { setOnboardingMode(null); setShowLeagueCreator(true); }} className="btn-gold">Create or join a league <ArrowRight size={16}/></button>
+                  <button onClick={() => openOverlay('leagues', () => { setOnboardingMode(null); setShowLeagueCreator(true); })} className="btn-gold">Create or join a league <ArrowRight size={16}/></button>
               </EmptyState>
           ) : (
               <>
@@ -1939,15 +2055,17 @@ export default function FiveStarApp() {
                               <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg font-mono text-xs font-bold ${RANK_STYLES[idx] || 'bg-white/[0.06] text-slate-500'}`}>
                                   {idx + 1}
                               </div>
-                              <Avatar url={p.avatar} name={p.name} size="md" onClick={() => setEnlargedAvatar({url: p.avatar, name: p.name})} />
+                              <Avatar url={p.avatar} name={p.name} size="md" onClick={() => openOverlay('avatar', () => setEnlargedAvatar({url: p.avatar, name: p.name}))} />
                               <div className="min-w-0 flex-1">
                                   <div className="flex items-center gap-1.5">
                                       <span className="truncate font-bold text-white">{p.name || 'Unknown'}</span>
                                       {isMe && <span className="eyebrow text-gold-400">You</span>}
                                       {p.isAdmin && <Crown size={12} className="shrink-0 text-gold-400"/>}
                                   </div>
-                                  <div className="mt-0.5 font-mono text-xs text-slate-500">
-                                      {p.wins || 0}<span className="text-slate-600">W</span> · {p.losses || 0}<span className="text-slate-600">L</span>
+                                  <div className="mt-0.5 font-mono text-sm font-medium text-slate-300">
+                                      {p.wins || 0}<span className="text-slate-500">W</span>
+                                      <span className="text-slate-600"> · </span>
+                                      {p.losses || 0}<span className="text-slate-500">L</span>
                                   </div>
                               </div>
                               <Pct value={currentReturn} className="text-base" />
@@ -1973,8 +2091,9 @@ export default function FiveStarApp() {
                       <PortfolioChart
                           series={seasonSeries}
                           labels={seasonLabels}
+                          ticks={seasonTicks}
                           format="money"
-                          axisLabel="Month"
+                          axisLabel="Week"
                           emptyMessage="Not enough of the season has been played yet."
                       />
                   )}
@@ -2231,7 +2350,7 @@ export default function FiveStarApp() {
 
               {roster.length === 0 ? (
                   <EmptyState icon={PieChart} title="Nothing drafted yet" body={isOpen ? 'Head to the Market tab and add tickers to build your book.' : 'Your roster is locked until the commissioner opens the month.'}>
-                      {isOpen && <button onClick={() => setCurrentView('market')} className="btn-gold">Browse the market <ArrowRight size={16}/></button>}
+                      {isOpen && <button onClick={() => navigateTo('market')} className="btn-gold">Browse the market <ArrowRight size={16}/></button>}
                   </EmptyState>
               ) : (
                 <div className="space-y-2">
@@ -2308,6 +2427,15 @@ export default function FiveStarApp() {
       // was ever written there.
       const recap = recapFor(activeLeague?.id, viewedMonth) || activeLeague?.recaps?.[viewedMonth]?.text;
 
+      // Bare month names keep the chips narrow enough to fit; the year is only
+      // needed when a season straddles New Year.
+      const spansYears = new Set(allMonths.map(m => parseMonth(m).year)).size > 1;
+      const monthChipLabel = (m) => {
+          const { year, month } = parseMonth(m);
+          const name = MONTH_NAMES[month - 1]?.slice(0, 3) || '—';
+          return spansYears ? `${name} '${String(year).slice(2)}` : name;
+      };
+
       if (selectedMatchup) {
         const m = selectedMatchup;
         const isBye = m.p2 === 'BYE';
@@ -2316,7 +2444,7 @@ export default function FiveStarApp() {
 
         return (
             <div className="animate-fade-up space-y-4">
-                <button onClick={() => setSelectedMatchup(null)} className="flex items-center gap-1.5 text-sm font-bold text-slate-500 transition hover:text-white">
+                <button onClick={() => closeOverlay(() => setSelectedMatchup(null))} className="flex items-center gap-1.5 text-sm font-bold text-slate-500 transition hover:text-white">
                     <ChevronLeft size={18} /> All matchups
                 </button>
 
@@ -2430,16 +2558,18 @@ export default function FiveStarApp() {
             <SectionHeading icon={Swords} title={monthLabel(viewedMonth)} meta={isLive ? 'Live scoring' : isPlayoffMonth && isCurrent ? 'Playoffs' : 'Head to head'} />
 
             {allMonths.length > 1 && (
-                <div className="no-scrollbar -mx-4 flex gap-1.5 overflow-x-auto px-4 pb-1">
+                // Wraps rather than scrolls — with a season this long the last
+                // month sat off-screen with nothing to indicate it was there.
+                <div className="flex flex-wrap gap-1.5">
                     {allMonths.map(m => {
                         const scored = (activeLeague?.schedule?.[m] || []).some(x => x.scored);
                         const active = m === viewedMonth;
                         return (
                             <button key={m} onClick={() => { setMatchupsMonth(m); setSelectedMatchup(null); }}
-                              className={`flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-bold transition ${active
+                              className={`flex items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-2 text-xs font-bold transition ${active
                                   ? 'bg-gold-sheen text-ink-950'
-                                  : 'bg-white/[0.05] text-slate-400 ring-1 ring-white/10 hover:bg-white/[0.10] hover:text-white'}`}>
-                                {monthLabel(m, true)}
+                                  : 'bg-white/[0.05] text-slate-300 ring-1 ring-white/10 hover:bg-white/[0.10] hover:text-white'}`}>
+                                {monthChipLabel(m)}
                                 {(recapFor(activeLeague?.id, m) || activeLeague?.recaps?.[m]) && <BookOpen size={11} className={active ? '' : 'text-gold-400'} />}
                                 {!scored && m !== activeLeague?.currentMonth && <span className={`h-1 w-1 rounded-full ${active ? 'bg-ink-950/40' : 'bg-slate-600'}`} />}
                             </button>
@@ -2482,7 +2612,8 @@ export default function FiveStarApp() {
                 const mine = m.p1 === user?.uid || m.p2 === user?.uid;
 
                 return (
-                    <Card key={i} className={`p-4 ${mine ? 'ring-gold-400/25' : ''}`} onClick={() => setSelectedMatchup({...m, p1Score: p1LiveScore, p2Score: p2LiveScore})}>
+                    <Card key={i} className={`p-4 ${mine ? 'ring-gold-400/25' : ''}`}
+                      onClick={() => openOverlay('matchup', () => setSelectedMatchup({...m, p1Score: p1LiveScore, p2Score: p2LiveScore}))}>
                         {m.type && (
                             <div className="mb-3 flex items-center justify-center gap-2">
                                 <span className="h-px flex-1 hairline" />
@@ -2793,7 +2924,7 @@ export default function FiveStarApp() {
           </div>
           <div className="flex shrink-0 items-center gap-1">
               {activeMembership && (
-                <button onClick={() => { setEditingName(activeMembership?.name || ''); setEditingAvatar(''); setShowProfile(true); }} aria-label="Edit profile"
+                <button onClick={() => openOverlay('profile', () => { setEditingName(activeMembership?.name || ''); setEditingAvatar(''); setShowProfile(true); })} aria-label="Edit profile"
                   className="rounded-lg p-2 text-slate-500 transition hover:bg-white/[0.06] hover:text-white"><User size={18}/></button>
               )}
               <button onClick={() => { signOut(auth); setMemberships([]); setActiveMembership(null); }} aria-label="Sign out"
@@ -2803,9 +2934,9 @@ export default function FiveStarApp() {
       </header>
 
       {enlargedAvatar && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 p-4 backdrop-blur-sm" onClick={() => setEnlargedAvatar(null)}>
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 p-4 backdrop-blur-sm" onClick={() => closeOverlay(() => setEnlargedAvatar(null))}>
               <div className="relative w-full max-w-sm animate-fade-up text-center" onClick={(e) => e.stopPropagation()}>
-                  <button onClick={() => setEnlargedAvatar(null)} aria-label="Close" className="absolute -top-11 right-0 text-slate-500 transition hover:text-white"><X size={22}/></button>
+                  <button onClick={() => closeOverlay(() => setEnlargedAvatar(null))} aria-label="Close" className="absolute -top-11 right-0 text-slate-500 transition hover:text-white"><X size={22}/></button>
                   {enlargedAvatar.url ? (
                     <img src={enlargedAvatar.url} alt={enlargedAvatar.name} className="mb-4 aspect-square w-full rounded-3xl object-cover shadow-lift ring-1 ring-white/10" />
                   ) : (
@@ -2826,7 +2957,7 @@ export default function FiveStarApp() {
                           <div className="eyebrow text-gold-400/80">Record results</div>
                           <h3 className="mt-0.5 text-xl font-extrabold tracking-tightest text-white">{monthLabel(backfillMonth)}</h3>
                       </div>
-                      <button onClick={() => setBackfillMonth(null)} aria-label="Close" className="text-slate-500 transition hover:text-white"><X size={20}/></button>
+                      <button onClick={() => closeOverlay(() => setBackfillMonth(null))} aria-label="Close" className="text-slate-500 transition hover:text-white"><X size={20}/></button>
                   </div>
                   <p className="mb-5 text-xs leading-relaxed text-slate-500">
                       Enter each player's % return for the month. Wins and points recalculate across the whole season when you save.
@@ -2881,7 +3012,7 @@ export default function FiveStarApp() {
                       <button onClick={saveBackfill} disabled={isProcessing} className="btn-gold flex-1">
                           {isProcessing ? <RefreshCw size={15} className="animate-spin"/> : <><Save size={15}/> Save results</>}
                       </button>
-                      <button onClick={() => setBackfillMonth(null)} className="btn-ghost flex-1">Cancel</button>
+                      <button onClick={() => closeOverlay(() => setBackfillMonth(null))} className="btn-ghost flex-1">Cancel</button>
                   </div>
               </div>
           </div>
@@ -2892,7 +3023,7 @@ export default function FiveStarApp() {
               <div className="surface w-full max-w-sm animate-fade-up p-6 shadow-lift">
                   <div className="mb-5 flex items-center justify-between">
                       <h3 className="text-lg font-extrabold tracking-tightest text-white">Edit profile</h3>
-                      <button onClick={() => setShowProfile(false)} aria-label="Close" className="text-slate-500 transition hover:text-white"><X size={20}/></button>
+                      <button onClick={() => closeOverlay(() => setShowProfile(false))} aria-label="Close" className="text-slate-500 transition hover:text-white"><X size={20}/></button>
                   </div>
 
                   <div className="mb-6 flex justify-center">
@@ -2910,7 +3041,7 @@ export default function FiveStarApp() {
 
                   <div className="flex gap-2">
                       <button onClick={handleUpdateProfile} className="btn-gold flex-1">Save changes</button>
-                      <button onClick={() => setShowProfile(false)} className="btn-ghost flex-1">Cancel</button>
+                      <button onClick={() => closeOverlay(() => setShowProfile(false))} className="btn-ghost flex-1">Cancel</button>
                   </div>
               </div>
           </div>
@@ -2935,7 +3066,7 @@ export default function FiveStarApp() {
               <button
                 key={item.key}
                 disabled={disabled}
-                onClick={() => { setCurrentView(item.key); if (item.key === 'matchups') { setSelectedMatchup(null); setMatchupsMonth(null); } }}
+                onClick={() => navigateTo(item.key)}
                 className={`group relative flex flex-1 flex-col items-center justify-center gap-1 transition disabled:opacity-30 ${active ? 'text-gold-300' : 'text-slate-600 hover:text-slate-400'}`}
               >
                 <span className={`absolute top-0 h-[2px] w-8 rounded-full bg-gold-sheen transition-opacity ${active ? 'opacity-100' : 'opacity-0'}`} />
