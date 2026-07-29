@@ -2572,6 +2572,8 @@ export default function FiveStarApp() {
         const isBye = m.p2 === 'BYE';
         const p1Leads = !isBye && m.p1Score > m.p2Score;
         const p2Leads = !isBye && m.p2Score > m.p1Score;
+        // A scored month has a winner; an open one only has someone in front.
+        const isFinal = !!m.scored;
 
         return (
             <div className="animate-fade-up space-y-4">
@@ -2599,7 +2601,9 @@ export default function FiveStarApp() {
                             <div className={`font-mono text-4xl font-extrabold tracking-tightest ${m.p1Score >= 0 ? 'text-gain' : 'text-loss'}`}>
                                 {m.p1Score > 0 ? '+' : ''}{m.p1Score}%
                             </div>
-                            {p1Leads && <div className="eyebrow mt-2 text-gold-400">Leading</div>}
+                            {p1Leads && (isFinal
+                                ? <div className="mt-2 flex items-center justify-center gap-1 text-gold-400"><Trophy size={13}/><span className="eyebrow text-gold-400">Winner</span></div>
+                                : <div className="eyebrow mt-2 text-gold-400">Leading</div>)}
                         </div>
 
                         <div className="z-10 w-2/12 pt-5 text-center">
@@ -2618,68 +2622,74 @@ export default function FiveStarApp() {
                             ) : (
                                 <div className="font-mono text-4xl font-extrabold text-slate-700">—</div>
                             )}
-                            {p2Leads && <div className="eyebrow mt-2 text-gold-400">Leading</div>}
+                            {p2Leads && (isFinal
+                                ? <div className="mt-2 flex items-center justify-center gap-1 text-gold-400"><Trophy size={13}/><span className="eyebrow text-gold-400">Winner</span></div>
+                                : <div className="eyebrow mt-2 text-gold-400">Leading</div>)}
                         </div>
                     </div>
                 </div>
 
-                {[m.p1, m.p2].filter(uid => uid && uid !== 'BYE').map(uid => {
-                    const player = leaguePlayers.find(p => p.userId === uid);
-                    if (!player) return null;
-                    const roster = player.roster || [];
-                    const cash = parseFloat(player.cash) || 0;
-                    const total = portfolioValueOf(player);
-                    return (
-                        <div key={uid} className="surface overflow-hidden">
-                            <div className="flex items-center justify-between border-b border-white/[0.07] px-4 py-3">
-                                <div className="flex min-w-0 items-center gap-2.5">
-                                    <Avatar url={player.avatar} name={player.name} size="sm" />
-                                    <span className="truncate text-sm font-bold text-white">{player.name}</span>
+                {/* Both books side by side so the two teams read as a comparison
+                    rather than two unrelated lists. */}
+                <div className="grid grid-cols-2 gap-2">
+                    {[m.p1, m.p2].filter(uid => uid && uid !== 'BYE').map(uid => {
+                        const player = leaguePlayers.find(p => p.userId === uid);
+                        if (!player) return null;
+                        const roster = player.roster || [];
+                        const cash = parseFloat(player.cash) || 0;
+                        const total = portfolioValueOf(player);
+                        const isWinner = m.scored && (uid === m.p1 ? m.p1Score > m.p2Score : m.p2Score > m.p1Score);
+                        return (
+                            <div key={uid} className={`surface flex flex-col overflow-hidden ${isWinner ? 'ring-gold-400/40' : ''}`}>
+                                <div className="border-b border-white/[0.07] px-3 py-2.5">
+                                    <div className="flex items-center gap-1.5">
+                                        <Avatar url={player.avatar} name={player.name} size="sm" />
+                                        <span className="min-w-0 flex-1 truncate text-xs font-bold text-white">{player.name}</span>
+                                        {isWinner && <Trophy size={13} className="shrink-0 text-gold-400" aria-label="Winner" />}
+                                    </div>
+                                    <div className="mt-1.5">
+                                        <div className="eyebrow">Portfolio</div>
+                                        <div className="font-mono text-sm font-bold text-white">{fmtFullMoney(total)}</div>
+                                    </div>
                                 </div>
-                                <div className="shrink-0 text-right">
-                                    <div className="eyebrow">Portfolio</div>
-                                    <div className="font-mono text-sm font-bold text-white">{fmtFullMoney(total)}</div>
-                                </div>
-                            </div>
 
-                            {roster.length === 0 ? (
-                                <p className="px-4 py-6 text-center text-sm text-slate-500">No holdings.</p>
-                            ) : (
-                                <div className="divide-y divide-white/[0.05]">
-                                    {roster.map(item => {
-                                        const change = stockMonthChange(item.id);
-                                        const price = priceOf(item.id);
-                                        const value = (parseFloat(item.shares) || 0) * price;
-                                        return (
-                                            <div key={item.id} className="flex items-center gap-3 px-4 py-2.5">
-                                                <div className="min-w-0 flex-1">
-                                                    <div className="flex items-center gap-2">
-                                                        <span className="font-mono text-sm font-bold text-white">{item.id}</span>
-                                                        {(player.franchiseStocks || []).includes(item.id) && <span className="eyebrow text-gold-400">F</span>}
+                                {roster.length === 0 ? (
+                                    <p className="flex-1 px-3 py-6 text-center text-xs text-slate-500">No holdings.</p>
+                                ) : (
+                                    <div className="flex-1 divide-y divide-white/[0.05]">
+                                        {roster.map(item => {
+                                            const change = stockMonthChange(item.id);
+                                            const price = priceOf(item.id);
+                                            const value = (parseFloat(item.shares) || 0) * price;
+                                            return (
+                                                <div key={item.id} className="px-3 py-2">
+                                                    <div className="flex items-center gap-1">
+                                                        <span className="min-w-0 flex-1 truncate font-mono text-xs font-bold text-white">{item.id}</span>
+                                                        {(player.franchiseStocks || []).includes(item.id) && <span className="eyebrow shrink-0 text-gold-400">F</span>}
                                                     </div>
-                                                    <div className="font-mono text-[11px] text-slate-500">
-                                                        {item.shares} sh @ ${price.toFixed(2)}
+                                                    <div className="truncate font-mono text-[10px] text-slate-500">
+                                                        {item.shares} @ ${price.toFixed(2)}
+                                                    </div>
+                                                    <div className="mt-0.5 flex items-baseline justify-between gap-1">
+                                                        <span className="truncate font-mono text-[11px] font-bold text-slate-200">{fmtFullMoney(value)}</span>
+                                                        {change === null
+                                                            ? <span className="font-mono text-[10px] text-slate-600">—</span>
+                                                            : <Pct value={change} className="shrink-0 text-[10px]" />}
                                                     </div>
                                                 </div>
-                                                <div className="shrink-0 text-right">
-                                                    <div className="font-mono text-sm font-bold text-slate-200">{fmtFullMoney(value)}</div>
-                                                    {change === null
-                                                        ? <span className="font-mono text-[11px] text-slate-600">—</span>
-                                                        : <Pct value={change} className="text-[11px]" />}
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            )}
+                                            );
+                                        })}
+                                    </div>
+                                )}
 
-                            <div className="flex items-center justify-between border-t border-white/[0.07] bg-black/20 px-4 py-2.5">
-                                <span className="eyebrow">Cash on hand</span>
-                                <span className="font-mono text-sm font-bold text-white">{fmtFullMoney(cash)}</span>
+                                <div className="mt-auto flex items-center justify-between gap-1 border-t border-white/[0.07] bg-black/20 px-3 py-2">
+                                    <span className="eyebrow">Cash</span>
+                                    <span className="truncate font-mono text-xs font-bold text-white">{fmtFullMoney(cash)}</span>
+                                </div>
                             </div>
-                        </div>
-                    );
-                })}
+                        );
+                    })}
+                </div>
             </div>
         );
       }
@@ -2741,6 +2751,10 @@ export default function FiveStarApp() {
                 const p1Leads = !isBye && p1LiveScore > p2LiveScore;
                 const p2Leads = !isBye && p2LiveScore > p1LiveScore;
                 const mine = m.p1 === user?.uid || m.p2 === user?.uid;
+                // Scored months get a trophy on the winner; a bye is a free win.
+                const final = !!m.scored;
+                const p1Won = final && (isBye || p1Leads);
+                const p2Won = final && p2Leads;
 
                 return (
                     <Card key={i} className={`p-4 ${mine ? 'ring-gold-400/25' : ''}`}
@@ -2756,7 +2770,10 @@ export default function FiveStarApp() {
                             <div className="flex min-w-0 flex-1 items-center gap-2.5">
                                 <Avatar url={avatarFor(m.p1)} name={m.p1Name} size="sm" className={p1Leads ? 'ring-gold-400/60' : ''} />
                                 <div className="min-w-0">
-                                    <div className={`truncate text-sm font-bold ${p1Leads ? 'text-white' : 'text-slate-300'}`}>{m.p1Name}</div>
+                                    <div className="flex items-center gap-1">
+                                        <span className={`truncate text-sm font-bold ${p1Leads ? 'text-white' : 'text-slate-300'}`}>{m.p1Name}</span>
+                                        {p1Won && <Trophy size={12} className="shrink-0 text-gold-400" aria-label="Winner" />}
+                                    </div>
                                     <Pct value={p1LiveScore} className="text-sm" />
                                 </div>
                             </div>
@@ -2765,7 +2782,10 @@ export default function FiveStarApp() {
 
                             <div className="flex min-w-0 flex-1 items-center justify-end gap-2.5 text-right">
                                 <div className="min-w-0">
-                                    <div className={`truncate text-sm font-bold ${p2Leads ? 'text-white' : 'text-slate-300'}`}>{m.p2Name}</div>
+                                    <div className="flex items-center justify-end gap-1">
+                                        {p2Won && <Trophy size={12} className="shrink-0 text-gold-400" aria-label="Winner" />}
+                                        <span className={`truncate text-sm font-bold ${p2Leads ? 'text-white' : 'text-slate-300'}`}>{m.p2Name}</span>
+                                    </div>
                                     {isBye ? <span className="font-mono text-sm font-bold text-slate-600">—</span> : <Pct value={p2LiveScore} className="text-sm" />}
                                 </div>
                                 <Avatar url={avatarFor(m.p2)} name={m.p2Name} size="sm" className={p2Leads ? 'ring-gold-400/60' : ''} />
