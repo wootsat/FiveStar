@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  TrendingUp, Trophy, Plus, Minus, RefreshCw, Shield, Crown, PlayCircle, Lock, LogOut, CheckCircle2, RotateCcw, Search, Save, DollarSign, Wallet, Users, BarChart3, PieChart, Settings, ArrowRight, Copy, Swords, ChevronLeft, Calendar, Edit2, Trash2, User, Upload, X, ArrowUp, ArrowDown, ArrowUpDown, Medal, Sparkles, Activity, CircleDollarSign, BookOpen, TrendingDown
+  TrendingUp, Trophy, Plus, Minus, RefreshCw, Shield, Crown, PlayCircle, Lock, LogOut, CheckCircle2, RotateCcw, Search, Save, DollarSign, Wallet, Users, BarChart3, PieChart, Settings, ArrowRight, Copy, Swords, ChevronLeft, Calendar, Edit2, Trash2, User, Upload, X, ArrowUp, ArrowDown, ArrowUpDown, Medal, Sparkles, Activity, CircleDollarSign, BookOpen, TrendingDown, ChevronDown
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
@@ -529,17 +529,30 @@ const WizardSteps = ({ steps, current }) => (
   </div>
 );
 
-const Panel = ({ icon: Icon, title, accent = 'gold', description, children }) => (
-  <section className="surface relative overflow-hidden p-5 pl-6">
-    <div className={`absolute inset-y-0 left-0 w-1 bg-gradient-to-b ${PANEL_ACCENTS[accent]}`} />
-    <h3 className="flex items-center gap-2 text-sm font-extrabold uppercase tracking-wide text-white">
-      {Icon && <Icon size={16} className="text-slate-400" />}
-      {title}
-    </h3>
-    {description && <p className="mt-1 text-xs leading-relaxed text-slate-500">{description}</p>}
-    <div className="mt-4">{children}</div>
-  </section>
-);
+// Collapsible: the Admin tab is long, and most sections are touched rarely.
+const Panel = ({ icon: Icon, title, accent = 'gold', description, defaultOpen = false, children }) => {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section className="surface relative overflow-hidden">
+      <div className={`absolute inset-y-0 left-0 w-1 bg-gradient-to-b ${PANEL_ACCENTS[accent]}`} />
+      <button
+        onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 py-4 pl-6 pr-4 text-left transition hover:bg-white/[0.02]"
+      >
+        {Icon && <Icon size={16} className="shrink-0 text-slate-400" />}
+        <span className="min-w-0 flex-1 text-sm font-extrabold uppercase tracking-wide text-white">{title}</span>
+        <ChevronDown size={16} className={`shrink-0 text-slate-500 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="animate-fade-up pb-5 pl-6 pr-5">
+          {description && <p className="mb-4 text-xs leading-relaxed text-slate-500">{description}</p>}
+          {children}
+        </div>
+      )}
+    </section>
+  );
+};
 
 // --- Main App ---
 
@@ -1468,15 +1481,34 @@ export default function FiveStarApp() {
       const batch = writeBatch(db);
       batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), leagueUpdate);
 
+      // Each team's baseline is the value captured when last month closed, plus
+      // this month's allowance. Using the frozen close rather than revaluing at
+      // click time means nothing falls between the two months, and the number
+      // doesn't drift with how long the commissioner takes to open the month.
+      const prevSnapshot = activeLeague.monthSnapshots?.[addMonths(activeLeague.currentMonth, -1)];
+
       leaguePlayers.filter(p => p.isPlayer).forEach(p => {
           const newCash = (parseFloat(p.cash) || 0) + allowance;
-          let holdings = 0;
-          (p.roster || []).forEach(item => {
-              holdings += (parseFloat(item.shares) || 0) * (starts[item.id] || 0);
-          });
+
+          const closedAt = Number(prevSnapshot?.teams?.[p.userId]?.endValue);
+          let baseline;
+          if (closedAt > 0) {
+              // endValue already includes last month's cash, so only the new
+              // allowance is added on top.
+              baseline = closedAt + allowance;
+          } else {
+              // First month of the season, or a month with no snapshot: value the
+              // book at this month's opening prices.
+              let holdings = 0;
+              (p.roster || []).forEach(item => {
+                  holdings += (parseFloat(item.shares) || 0) * (starts[item.id] || 0);
+              });
+              baseline = holdings + newCash;
+          }
+
           batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'league_players', p.id), {
               cash: newCash,
-              startValue: parseFloat((holdings + newCash).toFixed(2)),
+              startValue: parseFloat(baseline.toFixed(2)),
           });
       });
       await batch.commit();
@@ -2820,8 +2852,8 @@ export default function FiveStarApp() {
       <div className="space-y-4">
           <SectionHeading icon={Shield} title="Commissioner" meta={statusMeta(activeLeague?.status).label} />
 
-          <Panel icon={Crown} title="Season controls" accent="gold"
-            description={`${monthLabel(activeLeague?.seasonStart)} – ${monthLabel(activeLeague?.seasonEnd)}, playoffs ${monthLabel(activeLeague?.playoffMonth)}. $${Number(activeLeague?.monthlyAllowance || 0).toLocaleString()} deposited per player each month.`}>
+          <Panel icon={Crown} title="Season controls" accent="gold" defaultOpen
+            description={`${monthLabel(activeLeague?.seasonStart)} – ${monthLabel(activeLeague?.seasonEnd)}, playoffs ${monthLabel(activeLeague?.playoffMonth)}. $${Number(activeLeague?.monthlyAllowance || 0).toLocaleString()} deposited per player each month. Opening a month sets each team's baseline to their value at last month's close plus the allowance.`}>
              <div className="surface-sunken mb-3 flex items-center justify-between px-4 py-3">
                  <div>
                      <div className="eyebrow">Open month</div>
