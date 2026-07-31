@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { flushSync } from 'react-dom';
 import {
   TrendingUp, Trophy, Plus, Minus, RefreshCw, Shield, Crown, PlayCircle, Lock, LogOut, CheckCircle2, RotateCcw, Search, Save, DollarSign, Wallet, Users, BarChart3, PieChart, Settings, ArrowRight, Copy, Swords, ChevronLeft, Calendar, Edit2, Trash2, User, Upload, X, ArrowUp, ArrowDown, ArrowUpDown, Medal, Sparkles, Activity, CircleDollarSign, BookOpen, TrendingDown, ChevronDown
 } from 'lucide-react';
@@ -704,27 +705,11 @@ export default function FiveStarApp() {
   const swipeTrackRef = useRef(null);
   const gestureRef = useRef(null);
   const settlingRef = useRef(false);
-  const pendingSwapRef = useRef(false);
   const [swipeNeighbor, setSwipeNeighbor] = useState(null);
   const [isTouchDevice] = useState(() => {
     try { return window.matchMedia('(pointer: coarse)').matches; } catch { return false; }
   });
 
-  // A completed swipe leaves the track parked off to one side, holding the
-  // incoming tab in view. Clearing that transform has to happen after React has
-  // put the new tab in the flow slot but before the browser paints — do it any
-  // earlier and the outgoing tab snaps back into view for a frame.
-  useLayoutEffect(() => {
-    if (!pendingSwapRef.current) return;
-    pendingSwapRef.current = false;
-    const el = swipeTrackRef.current;
-    if (el) {
-      el.style.transition = '';
-      el.style.transform = '';
-      el.style.willChange = '';
-    }
-    window.scrollTo(0, 0);
-  });
 
   // Install prompt
   const [showInstall, setShowInstall] = useState(false);
@@ -3869,11 +3854,19 @@ export default function FiveStarApp() {
     const finish = () => {
       if (done) return;
       done = true;
-      el.removeEventListener('transitionend', finish);
+      el.removeEventListener('transitionend', onEnd);
       settlingRef.current = false;
       after();
     };
-    el.addEventListener('transitionend', finish);
+    // transitionend bubbles, and nearly every Card and button in the app carries
+    // its own transform transition. Without this guard a card releasing its
+    // :active state mid-swipe ends the settle early, wherever the track happens
+    // to be, which looks like the outgoing tab flashing back.
+    const onEnd = (e) => {
+      if (e.target !== el || e.propertyName !== 'transform') return;
+      finish();
+    };
+    el.addEventListener('transitionend', onEnd);
     setTimeout(finish, ms + 100);
     requestAnimationFrame(() => {
       el.style.transition = `transform ${ms}ms cubic-bezier(0.22, 0.61, 0.36, 1)`;
@@ -3949,12 +3942,23 @@ export default function FiveStarApp() {
     const commit = Math.abs(g.dx) > g.width * 0.28 || (speed > 0.45 && Math.abs(g.dx) > 40);
 
     if (!commit) { settleTrack(0, 180, clearTrack); return; }
-    // Leave the track exactly where the animation finished. The layout effect
-    // above resets it in the same frame that the new tab is mounted.
     settleTrack(-g.dir * g.width, 200, () => {
-      pendingSwapRef.current = true;
-      setSwipeNeighbor(null);
-      navigateTo(g.neighbor);
+      // flushSync renders and commits the tab swap to the DOM before this line
+      // returns, so the transform can be cleared immediately after with no paint
+      // in between. Relying on React to batch the two updates isn't enough: if it
+      // splits them, the first render still holds the outgoing tab and clearing
+      // the transform then snaps it back into view for a frame.
+      flushSync(() => {
+        setSwipeNeighbor(null);
+        navigateTo(g.neighbor);
+      });
+      const el = swipeTrackRef.current;
+      if (el) {
+        el.style.transition = '';
+        el.style.transform = '';
+        el.style.willChange = '';
+      }
+      window.scrollTo(0, 0);
     });
   };
 
