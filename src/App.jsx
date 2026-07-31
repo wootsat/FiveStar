@@ -7,7 +7,7 @@ import {
   getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut 
 } from 'firebase/auth';
 import {
-  getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, writeBatch, getDoc, query, where, deleteDoc, getDocs
+  getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, writeBatch, getDoc, query, where, deleteDoc, getDocs, runTransaction
 } from 'firebase/firestore';
 import { recapForMatchup, monthHasRecap } from './recaps';
 
@@ -27,7 +27,18 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
-const FINNHUB_API_KEY = "d52p16hr01qggm5t4cegd52p16hr01qggm5t4cf0"; 
+const FINNHUB_API_KEY = "d52p16hr01qggm5t4cegd52p16hr01qggm5t4cf0";
+
+// --- Shared market prices ---------------------------------------------------
+// Every quote the league scores against lives in one Firestore document that all
+// clients read. Before this, each device fetched Finnhub itself and cached the
+// results locally, so a phone and a desktop could show the same team two very
+// different monthly returns. One client at a time takes a short lease and does
+// the sweep on everyone's behalf; the rest just listen.
+const PRICES_DOC = doc(db, 'artifacts', appId, 'public', 'data', 'market', 'prices');
+const PRICE_REFRESH_MS = 5 * 60 * 1000;  // how stale the shared prices may get
+const SWEEP_LEASE_MS = 3 * 60 * 1000;    // ceiling on one sweep, then the lease lapses
+const PRICE_CHECK_MS = 60 * 1000;        // how often a client checks the age
 
 // Served from public/ — regenerate the sizes with `npm run icons`.
 const LOGO_URL = `${import.meta.env.BASE_URL}icon-192.png`;
@@ -647,12 +658,20 @@ export default function FiveStarApp() {
 
   // Real Data
   const rateLimitedUntilRef = useRef(0);
+  const sweepInFlightRef = useRef(false);
+  const lastLocalSweepRef = useRef(0);
+  // Set if the shared price doc can't be read or written — most likely because
+  // the Firestore rules don't cover `market/prices` yet. Clients then fall back
+  // to sweeping for themselves, which is the old behaviour: the app keeps
+  // working, it just can't guarantee two devices agree.
+  const sharedPricesBrokenRef = useRef(false);
   const [liveMarketData, setLiveMarketData] = useState(() => {
     const cached = localStorage.getItem('fivestar_market_data');
     if (!cached) return {};
     try {
-      // Earlier builds cached zero prices from failed reads — drop them on load
-      // so a stale $0.00 can't keep scoring against a team.
+      // Only a seed for the first paint — the shared snapshot replaces this
+      // wholesale as soon as it lands. Earlier builds cached zero prices from
+      // failed reads, so drop those: a stale $0.00 must never score a team.
       const parsed = JSON.parse(cached);
       return Object.fromEntries(Object.entries(parsed).filter(([, v]) => Number(v?.c) > 0));
     } catch { return {}; }
@@ -919,22 +938,10 @@ export default function FiveStarApp() {
     ? activeLeague.stockPool
     : masterStocks.map(s => s.id);
 
-  const fetchStockData = async () => {
-    if (trackedTickers.length === 0) return;
-    if (FINNHUB_API_KEY === "YOUR_FINNHUB_KEY") {
-       const newData = {};
-       trackedTickers.forEach(id => {
-         const current = 150 + Math.random()*10;
-         newData[id] = { c: current, monthOpen: 145, pc: 148, dp: ((current - 148) / 148) * 100 };
-       });
-       setLiveMarketData(newData);
-       return;
-    }
-
-    // Finnhub's free tier allows 60 calls/minute. Space requests so a full pool
-    // sweep can't trip the limit, and stand down entirely if it already has.
-    if (Date.now() < rateLimitedUntilRef.current) return;
-
+  // One pass over the pool, merged onto the prices we already hold. Returns the
+  // merged map, or null when nothing usable came back. Never publishes — the
+  // caller decides whether this sweep is the league's or just this device's.
+  const sweepQuotes = async () => {
     const newData = { ...liveMarketData };
     let hasUpdates = false;
 
@@ -976,17 +983,118 @@ export default function FiveStarApp() {
         hasUpdates = true;
       } catch (err) { console.error(`Error fetching ${ticker}:`, err); }
     }
-    if (hasUpdates) setLiveMarketData(newData);
+    return hasUpdates ? newData : null;
   };
 
-  // Finnhub's free tier shares 60 calls/minute across every signed-in client, so a
-  // per-minute sweep from several open tabs is what starves tickers of a price.
-  // Scoring is monthly — five-minute freshness is plenty, and prices are cached
-  // to localStorage so the UI is never empty between sweeps.
+  // Take a short lease so four open tabs don't all sweep at once. False means
+  // someone else already refreshed recently, or is mid-sweep right now.
+  const claimSweep = async () => {
+    try {
+      return await runTransaction(db, async (tx) => {
+        const snap = await tx.get(PRICES_DOC);
+        const data = snap.exists() ? snap.data() : {};
+        const now = Date.now();
+        if (now - Number(data.updatedAt || 0) < PRICE_REFRESH_MS) return false;
+        if (now < Number(data.sweepingUntil || 0)) return false;
+        tx.set(PRICES_DOC, { sweepingUntil: now + SWEEP_LEASE_MS }, { merge: true });
+        return true;
+      });
+    } catch (err) {
+      console.warn('Shared prices unavailable — falling back to a local sweep.', err);
+      sharedPricesBrokenRef.current = true;
+      return false;
+    }
+  };
+
+  const publishQuotes = async (quotes) => {
+    try {
+      await setDoc(PRICES_DOC, {
+        quotes,
+        updatedAt: Date.now(),
+        updatedBy: user?.uid || null,
+        sweepingUntil: 0,
+      }, { merge: true });
+    } catch (err) {
+      console.warn('Could not publish shared prices — keeping them on this device.', err);
+      sharedPricesBrokenRef.current = true;
+    }
+  };
+
+  // Refresh the league's prices if they've aged out. `force` skips both the age
+  // check and the lease: opening or closing a month is the commissioner asking
+  // for the freshest numbers there are, and it's worth the extra calls.
+  const refreshPrices = async ({ force = false } = {}) => {
+    if (trackedTickers.length === 0) return null;
+
+    if (FINNHUB_API_KEY === "YOUR_FINNHUB_KEY") {
+      // No key configured — simulate on this device only. Fake prices must never
+      // reach the shared document, where they'd score everyone's month.
+      const fake = {};
+      trackedTickers.forEach(id => {
+        const current = 150 + Math.random() * 10;
+        fake[id] = { c: current, monthOpen: 145, pc: 148, dp: ((current - 148) / 148) * 100 };
+      });
+      setLiveMarketData(fake);
+      return fake;
+    }
+
+    if (sweepInFlightRef.current) return null;
+    // The free tier's 60 calls/minute are shared across every client using the
+    // key, so stand down completely once we've tripped it.
+    if (Date.now() < rateLimitedUntilRef.current) return null;
+
+    const shared = !sharedPricesBrokenRef.current;
+    if (!force) {
+      // The lease is what paces us normally. Without it — shared prices are
+      // unreachable — this client is on its own clock, and the checker runs every
+      // minute, so throttle here or we'd sweep five times as often as before.
+      if (shared) {
+        if (!(await claimSweep())) return null;
+      } else if (Date.now() - lastLocalSweepRef.current < PRICE_REFRESH_MS) {
+        return null;
+      }
+    }
+    lastLocalSweepRef.current = Date.now();
+
+    sweepInFlightRef.current = true;
+    try {
+      const quotes = await sweepQuotes();
+      if (!quotes) return null;
+      if (shared && !sharedPricesBrokenRef.current) await publishQuotes(quotes);
+      // The listener below will hand this back to us, but set it now so a forced
+      // refresh can be read by its caller without waiting for the round trip.
+      setLiveMarketData(quotes);
+      return quotes;
+    } finally {
+      sweepInFlightRef.current = false;
+    }
+  };
+
+  // The single source of truth. Whatever lands here replaces local state
+  // outright, so every device scores the month off identical numbers — the
+  // localStorage copy is only ever a seed for the first paint.
   useEffect(() => {
     if (!user) return;
-    fetchStockData();
-    const interval = setInterval(fetchStockData, 300000);
+    const unsub = onSnapshot(PRICES_DOC, (snap) => {
+      const quotes = snap.data()?.quotes;
+      if (!quotes || typeof quotes !== 'object') return;
+      const clean = Object.fromEntries(Object.entries(quotes).filter(([, v]) => Number(v?.c) > 0));
+      if (Object.keys(clean).length > 0) setLiveMarketData(clean);
+    }, (err) => {
+      console.warn('Cannot read shared prices — falling back to local sweeps.', err);
+      sharedPricesBrokenRef.current = true;
+    });
+    return unsub;
+  }, [user]);
+
+  // Scoring is monthly, so five-minute freshness is plenty. Each client checks
+  // the age of the shared prices every minute and only reaches for Finnhub when
+  // they've gone stale and nobody else has claimed the sweep. Total API usage is
+  // one sweep per five minutes no matter how many people have the app open.
+  useEffect(() => {
+    if (!user) return;
+    refreshPrices();
+    const interval = setInterval(() => { refreshPrices(); }, PRICE_CHECK_MS);
     return () => clearInterval(interval);
   }, [user, trackedTickers.length, activeLeague?.id]);
 
@@ -1477,7 +1585,9 @@ export default function FiveStarApp() {
   // Opens a month: deposits everyone's allowance, then snapshots the value they
   // have to beat. Positions carry over from the previous month.
   const startMonth = async () => {
-      await fetchStockData();
+      // Read the sweep's own return value: setLiveMarketData won't have landed in
+      // this closure yet, and these prices become the month's baseline.
+      const fresh = (await refreshPrices({ force: true })) || liveMarketData;
       const allowance = Number(activeLeague.monthlyAllowance) || 0;
       const pool = activeLeague.stockPool || [];
 
@@ -1486,7 +1596,7 @@ export default function FiveStarApp() {
       const starts = {};
       const missing = [];
       pool.forEach(id => {
-          const live = Number(liveMarketData[id]?.c);
+          const live = Number(fresh[id]?.c);
           const prevBase = Number(activeLeague.startingPrices?.[id]);
           const prevInitial = Number(activeLeague.initialPrices?.[id]);
           if (live > 0) starts[id] = live;
@@ -1555,7 +1665,7 @@ export default function FiveStarApp() {
   };
 
   const endMonth = async () => {
-      await fetchStockData();
+      await refreshPrices({ force: true });
       const prices = activeLeague.startingPrices || {};
       const updates = (activeLeague.matchups || []).map((m) => {
           const p1 = leaguePlayers.find(p=>p.userId===m.p1);
