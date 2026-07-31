@@ -161,6 +161,50 @@ const SERIES_COLORS = ['#d97706', '#0891b2', '#6366f1', '#e11d48', '#15803d', '#
 
 const fmtAxisMoney = (v) => Math.abs(v) >= 1000 ? `$${(v / 1000).toFixed(1)}k` : `$${v.toFixed(0)}`;
 const fmtFullMoney = (v) => `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+const fmtPct = (v) => `${Number(v) > 0 ? '+' : ''}${Number(v).toFixed(2)}%`;
+
+// --- Seasons ---
+
+// Seasons are named for the calendar years they touch: '2026' inside one year,
+// '2026-27' when the schedule runs across New Year.
+const seasonLabel = (start, end) => {
+  const a = parseMonth(start).year;
+  const b = parseMonth(end).year;
+  if (!a) return '—';
+  if (!b || a === b) return String(a);
+  return `${a}-${String(b).slice(2)}`;
+};
+
+// A season's return compounds its monthly scores rather than summing them. Each
+// month's percentage is measured against that month's own opening value, so they
+// multiply — summing would flatter a good season and libel a bad one.
+const compoundReturn = (scores) =>
+  ((scores || []).reduce((acc, s) => acc * (1 + (Number(s) || 0) / 100), 1) - 1) * 100;
+
+// Flattens a schedule into one row per team per scored month. Names are captured
+// as they were at the time, so a later rename can't rewrite history.
+const teamMonthsFromSchedule = (schedule) => {
+  const rows = [];
+  Object.entries(schedule || {}).forEach(([month, matchups]) => {
+    (matchups || []).forEach(m => {
+      if (!m.scored) return;
+      if (m.p1) rows.push({ month, userId: m.p1, name: m.p1Name, score: Number(m.p1Score) || 0 });
+      if (m.p2 && m.p2 !== 'BYE') rows.push({ month, userId: m.p2, name: m.p2Name, score: Number(m.p2Score) || 0 });
+    });
+  });
+  return rows;
+};
+
+// The title goes to whoever wins the matchup the playoff generator tagged
+// 'Championship'. An exact tie leaves the season without one.
+const championFrom = (schedule, playoffMonth) => {
+  const final = (schedule?.[playoffMonth] || []).find(m => m.type === 'Championship' && m.scored);
+  if (!final || final.p2 === 'BYE') return null;
+  if (Number(final.p1Score) === Number(final.p2Score)) return null;
+  return Number(final.p1Score) > Number(final.p2Score)
+    ? { userId: final.p1, name: final.p1Name }
+    : { userId: final.p2, name: final.p2Name };
+};
 
 // `labels` are the x-axis tick captions, one per point. `format` switches the
 // y-axis and tooltip between dollars and percentages.
@@ -650,6 +694,8 @@ export default function FiveStarApp() {
   const [newLeagueNameSetting, setNewLeagueNameSetting] = useState('');
   const [backfillMonth, setBackfillMonth] = useState(null);
   const [backfillScores, setBackfillScores] = useState({});
+  const [nextSeason, setNextSeason] = useState({ seasonStart: '', seasonEnd: '' });
+  const [pastTitle, setPastTitle] = useState({ label: '', name: '' });
 
   // Install prompt
   const [showInstall, setShowInstall] = useState(false);
@@ -1510,6 +1556,92 @@ export default function FiveStarApp() {
   const allMonths = activeLeague?.playoffMonth ? [...seasonMonths, activeLeague.playoffMonth] : seasonMonths;
   const isPlayoffMonth = activeLeague?.currentMonth && activeLeague.currentMonth === activeLeague.playoffMonth;
 
+  // --- Record book ---------------------------------------------------------
+  // Archived seasons live on the league document; the season in progress is
+  // assembled from the live schedule so a record set this month appears at once.
+  const currentSeasonRecord = activeLeague ? {
+      label: seasonLabel(activeLeague.seasonStart, activeLeague.playoffMonth || activeLeague.seasonEnd),
+      seasonStart: activeLeague.seasonStart,
+      seasonEnd: activeLeague.seasonEnd,
+      playoffMonth: activeLeague.playoffMonth || null,
+      champion: championFrom(activeLeague.schedule, activeLeague.playoffMonth),
+      standings: leaguePlayers.filter(p => p.isPlayer)
+          .map(p => ({ userId: p.userId, name: p.name, wins: Number(p.wins) || 0, losses: Number(p.losses) || 0, points: Number(p.points) || 0 }))
+          .sort((a, b) => b.wins - a.wins || b.points - a.points),
+      months: teamMonthsFromSchedule(activeLeague.schedule),
+      inProgress: true,
+  } : null;
+
+  const allSeasons = [...(activeLeague?.seasons || []), ...(currentSeasonRecord ? [currentSeasonRecord] : [])];
+
+  const recordBook = (() => {
+      const months = [];
+      const seasonReturns = [];
+      const titles = new Map();
+      const careers = new Map();
+
+      allSeasons.forEach(s => {
+          (s.months || []).forEach(r => months.push({ ...r, season: s.label }));
+
+          const byTeam = new Map();
+          (s.months || []).forEach(r => {
+              if (!byTeam.has(r.userId)) byTeam.set(r.userId, { name: r.name, scores: [] });
+              byTeam.get(r.userId).scores.push(r.score);
+          });
+          // A season still being played has months left to change it, so it can't
+          // hold a season record yet — its individual months still count.
+          if (!s.inProgress) {
+              byTeam.forEach((v, userId) => seasonReturns.push({
+                  userId, name: v.name, season: s.label, pct: compoundReturn(v.scores),
+              }));
+          }
+
+          // A backfilled title may name a team that predates the app and has no
+          // account, so fall back to the name itself as the identity.
+          const champKey = s.champion?.userId
+              || (s.champion?.name ? `name:${String(s.champion.name).trim().toLowerCase()}` : null);
+          if (champKey) {
+              const t = titles.get(champKey) || { name: s.champion.name, userId: s.champion.userId || null, seasons: [] };
+              t.name = s.champion.name;
+              t.seasons.push(s.label);
+              titles.set(champKey, t);
+          }
+
+          (s.standings || []).forEach(st => {
+              const c = careers.get(st.userId) || { name: st.name, userId: st.userId, wins: 0, losses: 0, seasons: 0, titles: 0 };
+              c.name = st.name;
+              c.wins += st.wins;
+              c.losses += st.losses;
+              c.seasons += 1;
+              careers.set(st.userId, c);
+          });
+      });
+
+      titles.forEach((t, key) => {
+          const careerKey = t.userId || key;
+          const c = careers.get(careerKey);
+          // A team whose only appearances are backfilled titles still belongs in
+          // the all-time list — with the trophies and nothing else.
+          if (c) c.titles = t.seasons.length;
+          else careers.set(careerKey, { name: t.name, userId: t.userId, wins: 0, losses: 0, seasons: 0, titles: t.seasons.length });
+      });
+
+      const byScore = [...months].sort((a, b) => b.score - a.score);
+      const byPct = [...seasonReturns].sort((a, b) => b.pct - a.pct);
+
+      return {
+          months,
+          bestMonth: byScore[0] || null,
+          worstMonth: byScore.length ? byScore[byScore.length - 1] : null,
+          bestSeason: byPct[0] || null,
+          worstSeason: byPct.length ? byPct[byPct.length - 1] : null,
+          titles: [...titles.entries()].map(([key, t]) => ({ key, ...t }))
+              .sort((a, b) => b.seasons.length - a.seasons.length || a.name.localeCompare(b.name)),
+          careers: [...careers.entries()].map(([key, c]) => ({ key, ...c }))
+              .sort((a, b) => b.titles - a.titles || b.wins - a.wins || a.name.localeCompare(b.name)),
+      };
+  })();
+
   const generateSeasonSchedule = () => {
       const playingMembers = leaguePlayers.filter(p => p.isPlayer);
       const schedule = {};
@@ -1545,6 +1677,111 @@ export default function FiveStarApp() {
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), {
           status: 'ready', schedule: sched, currentMonth: first, matchups: sched[first] || []
       });
+  };
+
+  // Seasons the league played before it was ever in the app. They carry a
+  // champion and nothing else — there are no scores behind them, so they add to
+  // the trophy count without being able to set month or season records.
+  const addPastChampionship = async () => {
+      if (!activeMembership?.isAdmin) return;
+      const label = pastTitle.label.trim();
+      const name = pastTitle.name.trim();
+      if (!label || !name) return alert('Enter both a season and a champion.');
+      if ((activeLeague?.seasons || []).some(s => String(s.label) === label)) {
+          return alert(`${label} is already in the book. Remove it first if you want to change it.`);
+      }
+      // Link to a current player when the name matches one, so their avatar and
+      // all-time row pick the title up rather than it standing on its own.
+      const match = leaguePlayers.find(p => p.isPlayer && String(p.name).trim().toLowerCase() === name.toLowerCase());
+      const entry = {
+          label,
+          manual: true,
+          champion: { userId: match?.userId || null, name: match?.name || name },
+          standings: [],
+          months: [],
+          seasonStart: null,
+          seasonEnd: null,
+          playoffMonth: null,
+          addedAt: Date.now(),
+      };
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), {
+          seasons: [...(activeLeague?.seasons || []), entry],
+      });
+      setPastTitle({ label: '', name: '' });
+  };
+
+  // Only hand-added seasons can be removed — an archived season is the sole
+  // surviving copy of the months it holds.
+  const removePastChampionship = async (label) => {
+      if (!activeMembership?.isAdmin) return;
+      if (!confirm(`Remove the ${label} championship from the record book?`)) return;
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), {
+          seasons: (activeLeague?.seasons || []).filter(s => !(s.manual && String(s.label) === String(label))),
+      });
+  };
+
+  // Rolls the league into a new year. The finished season is archived onto the
+  // league document in the same batch that clears the schedule it was built from
+  // — the archive is the only copy once this commits, so it cannot be a
+  // follow-up write that might not land.
+  const startNextSeason = async () => {
+      if (!activeMembership?.isAdmin || !activeLeague) return;
+      const start = nextSeason.seasonStart || addMonths(activeLeague.seasonStart, 12);
+      const end = nextSeason.seasonEnd || addMonths(activeLeague.seasonEnd, 12);
+      if (!start || !end || end < start) return alert('The new season must end after it starts.');
+
+      const played = teamMonthsFromSchedule(activeLeague.schedule);
+      const record = {
+          label: seasonLabel(activeLeague.seasonStart, activeLeague.playoffMonth || activeLeague.seasonEnd),
+          seasonStart: activeLeague.seasonStart || null,
+          seasonEnd: activeLeague.seasonEnd || null,
+          playoffMonth: activeLeague.playoffMonth || null,
+          champion: championFrom(activeLeague.schedule, activeLeague.playoffMonth),
+          standings: leaguePlayers.filter(p => p.isPlayer)
+              .map(p => ({ userId: p.userId, name: p.name, wins: Number(p.wins) || 0, losses: Number(p.losses) || 0, points: Number(p.points) || 0 }))
+              .sort((a, b) => b.wins - a.wins || b.points - a.points),
+          months: played,
+          // The raw schedule is small and is the only surviving copy of who
+          // played whom once the live one is cleared. Month snapshots are
+          // deliberately not archived — they carry a full price book per month
+          // and would grow the league document without bound.
+          schedule: activeLeague.schedule || {},
+          archivedAt: Date.now(),
+      };
+
+      const newPlayoff = addMonths(end, 1);
+      const warning = record.champion
+          ? `${record.champion.name} goes into the book as ${record.label} champion.`
+          : `No championship was scored, so ${record.label} is archived without a champion.`;
+      const ok = confirm(
+          `Archive ${record.label} and start ${seasonLabel(start, newPlayoff)}?\n\n${warning}\n\n` +
+          `Every team's roster, cash, franchise stocks and W-L record will be cleared for a fresh start. ` +
+          `The archived season stays in the Records tab permanently. This cannot be undone.`
+      );
+      if (!ok) return;
+
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'leagues', activeMembership.leagueId), {
+          seasons: [...(activeLeague.seasons || []), record],
+          seasonStart: start,
+          seasonEnd: end,
+          playoffMonth: newPlayoff,
+          currentMonth: start,
+          status: 'setup',
+          schedule: {},
+          matchups: [],
+          monthSnapshots: {},
+          startingPrices: {},
+          initialPrices: {},
+      });
+      leaguePlayers.filter(p => p.isPlayer).forEach(p => {
+          batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'league_players', p.id), {
+              wins: 0, losses: 0, points: 0, roster: [], cash: 0,
+              startValue: 0, franchiseStocks: [], valueHistory: {},
+          });
+      });
+      await batch.commit();
+      setNextSeason({ seasonStart: '', seasonEnd: '' });
   };
 
   // Every player's standings are derived from the recorded schedule rather than
@@ -3327,6 +3564,70 @@ export default function FiveStarApp() {
              )}
           </Panel>
 
+          <Panel icon={Crown} title="Past champions" accent="gold"
+            description="Titles the league won before it was in the app. These count toward the championship tally and the all-time list. They carry no monthly scores, so they can't set month or season records.">
+             <div className="space-y-4">
+                {(activeLeague?.seasons || []).some(s => s.manual) && (
+                   <div className="divide-y divide-white/[0.05]">
+                      {(activeLeague?.seasons || []).filter(s => s.manual)
+                        .sort((a, b) => String(a.label).localeCompare(String(b.label)))
+                        .map(s => (
+                         <div key={s.label} className="flex items-center gap-2.5 py-2">
+                            <Trophy size={14} className="shrink-0 text-gold-400"/>
+                            <span className="shrink-0 font-mono text-sm font-bold text-white">{s.label}</span>
+                            <span className="min-w-0 flex-1 truncate text-sm text-slate-300">{s.champion?.name}</span>
+                            <button onClick={() => removePastChampionship(s.label)} aria-label={`Remove ${s.label}`}
+                              className="shrink-0 rounded-lg p-1.5 text-slate-500 transition hover:bg-white/[0.06] hover:text-rose-300">
+                               <Trash2 size={14}/>
+                            </button>
+                         </div>
+                      ))}
+                   </div>
+                )}
+                <div className="grid grid-cols-[104px_1fr] gap-2">
+                   <input className="field-sm" placeholder="2024" value={pastTitle.label}
+                     onChange={(e) => setPastTitle(t => ({ ...t, label: e.target.value }))} />
+                   <input className="field-sm" list="fivestar-team-names" placeholder="Champion" value={pastTitle.name}
+                     onChange={(e) => setPastTitle(t => ({ ...t, name: e.target.value }))} />
+                </div>
+                <datalist id="fivestar-team-names">
+                   {leaguePlayers.filter(p => p.isPlayer).map(p => <option key={p.id} value={p.name} />)}
+                </datalist>
+                <p className="text-xs leading-relaxed text-slate-500">
+                   Type a season and the team that won it. Matching a current team's name exactly links the title to them; any other name is recorded as written.
+                </p>
+                <button onClick={addPastChampionship} className="btn-ghost w-full py-2.5">
+                   <Plus size={15}/> Add championship
+                </button>
+             </div>
+          </Panel>
+
+          <Panel icon={RotateCcw} title="Roll into next season" accent="purple"
+            description="Files the current season in the record book — champion, final standings and every monthly score — then clears each team's roster, cash, franchise stocks and W-L record for a fresh start. The stock pool is kept. Run this once the playoff month has been scored.">
+             <div className="space-y-4">
+                <div>
+                   <div className="eyebrow mb-1.5">First month of the new season</div>
+                   <MonthPicker
+                     value={nextSeason.seasonStart || (activeLeague?.seasonStart ? addMonths(activeLeague.seasonStart, 12) : currentMonthKey())}
+                     onChange={(v) => setNextSeason(s => ({ ...s, seasonStart: v }))} />
+                </div>
+                <div>
+                   <div className="eyebrow mb-1.5">Last regular month</div>
+                   <MonthPicker
+                     value={nextSeason.seasonEnd || (activeLeague?.seasonEnd ? addMonths(activeLeague.seasonEnd, 12) : currentMonthKey())}
+                     onChange={(v) => setNextSeason(s => ({ ...s, seasonEnd: v }))} />
+                </div>
+                <p className="text-xs leading-relaxed text-slate-500">
+                   Playoffs are the month after the last regular month, same as when the league was created.
+                   {(activeLeague?.seasons?.length || 0) > 0 &&
+                     ` ${activeLeague.seasons.length} season${activeLeague.seasons.length === 1 ? '' : 's'} already in the book.`}
+                </p>
+                <button onClick={startNextSeason} className="btn-ghost w-full py-3">
+                   <RotateCcw size={15}/> Archive season &amp; start the next one
+                </button>
+             </div>
+          </Panel>
+
           <Panel icon={Trash2} title="Danger zone" accent="rose" description="Deleting a league removes every roster, matchup and record in it. This cannot be undone.">
              <button onClick={handleDeleteLeague} disabled={isProcessing} className="btn-danger w-full py-3">
                 {isProcessing ? 'Deleting…' : <><Trash2 size={15}/> Delete league</>}
@@ -3335,11 +3636,162 @@ export default function FiveStarApp() {
       </div>
   );
 
+  // The league's permanent history: titles, all-time records, and every season
+  // played. Archived seasons and the one in progress are treated identically,
+  // except that an unfinished season can't yet hold a season record.
+  const renderRecords = () => {
+      const rb = recordBook;
+      const avatarOf = (uid) => leaguePlayers.find(p => p.userId === uid)?.avatar;
+
+      // Month rows carry `score` and `month`; season rows carry `pct` and `season`.
+      const recordTile = (label, row) => {
+          const value = row ? (row.score !== undefined ? row.score : row.pct) : null;
+          return (
+              <div className="surface p-4">
+                  <div className="eyebrow">{label}</div>
+                  {!row ? (
+                      <div className="mt-1.5 font-mono text-2xl font-extrabold text-slate-700">—</div>
+                  ) : (
+                      <>
+                          <div className={`mt-1.5 font-mono text-2xl font-extrabold tracking-tightest ${value >= 0 ? 'text-gain' : 'text-loss'}`}>
+                              {fmtPct(value)}
+                          </div>
+                          <div className="mt-1 truncate text-sm font-bold text-white">{row.name}</div>
+                          <div className="mt-0.5 truncate font-mono text-[11px] text-slate-500">
+                              {row.month ? `${monthLabel(row.month, true)}` : `${row.season} season`}
+                          </div>
+                      </>
+                  )}
+              </div>
+          );
+      };
+
+      if (rb.months.length === 0) {
+          return <EmptyState icon={BookOpen} title="The book is empty"
+              body="Once the first month is closed and scored, records start going in here — and they stay, season after season." />;
+      }
+
+      return (
+          <div className="space-y-5">
+              <Card className="p-5">
+                  <div className="mb-3 flex items-center gap-2">
+                      <Crown size={15} className="shrink-0 text-gold-400" />
+                      <h2 className="text-base font-extrabold tracking-tightest text-white">Championships</h2>
+                  </div>
+                  {rb.titles.length === 0 ? (
+                      <p className="text-sm text-slate-500">
+                          None awarded yet. The title goes to the winner of the championship matchup
+                          {activeLeague?.playoffMonth ? ` in ${monthLabel(activeLeague.playoffMonth)}` : ''}.
+                      </p>
+                  ) : (
+                      <div className="divide-y divide-white/[0.05]">
+                          {rb.titles.map(t => (
+                              <div key={t.key} className="flex items-center gap-3 py-2.5">
+                                  <Avatar url={avatarOf(t.userId)} name={t.name} size="sm" />
+                                  <div className="min-w-0 flex-1">
+                                      <div className="truncate text-sm font-bold text-white">{t.name}</div>
+                                      <div className="truncate font-mono text-[11px] text-slate-500">{t.seasons.join(', ')}</div>
+                                  </div>
+                                  <div className="flex shrink-0 items-center gap-1">
+                                      <Trophy size={14} className="text-gold-400" />
+                                      <span className="font-mono text-sm font-extrabold text-gold-300">{t.seasons.length}</span>
+                                  </div>
+                              </div>
+                          ))}
+                      </div>
+                  )}
+              </Card>
+
+              <div>
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                      <span className="eyebrow">Record book</span>
+                      <span className="eyebrow">{rb.months.length} team month{rb.months.length === 1 ? '' : 's'} on file</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                      {recordTile('Best month', rb.bestMonth)}
+                      {recordTile('Worst month', rb.worstMonth)}
+                      {recordTile('Best season', rb.bestSeason)}
+                      {recordTile('Worst season', rb.worstSeason)}
+                  </div>
+                  {!rb.bestSeason && (
+                      <p className="mt-2 px-1 text-[11px] leading-relaxed text-slate-500">
+                          Season records are set when a season is archived — the one in progress still has months left to change it.
+                      </p>
+                  )}
+              </div>
+
+              <div>
+                  <span className="eyebrow">Season by season</span>
+                  <div className="mt-2 space-y-2">
+                      {[...allSeasons]
+                        .sort((a, b) => String(b.seasonStart || b.label).localeCompare(String(a.seasonStart || a.label)))
+                        .map((s, i) => (
+                          <Card key={`${s.label}-${i}`} className="p-4">
+                              <div className="flex flex-wrap items-center gap-2">
+                                  <span className="font-mono text-sm font-extrabold text-white">{s.label}</span>
+                                  {s.inProgress
+                                      ? <span className="chip-muted">In progress</span>
+                                      : s.champion
+                                          ? <span className="chip-gold"><Trophy size={11}/>{s.champion.name}</span>
+                                          : <span className="chip-muted">No champion</span>}
+                                  <span className="ml-auto shrink-0 font-mono text-[11px] text-slate-500">
+                                      {s.manual
+                                          ? 'Recorded by hand'
+                                          : `${monthLabel(s.seasonStart, true)} – ${monthLabel(s.playoffMonth || s.seasonEnd, true)}`}
+                                  </span>
+                              </div>
+                              {(s.standings || []).length > 0 && (
+                                  <div className="mt-3 divide-y divide-white/[0.05]">
+                                      {s.standings.map((st, idx) => (
+                                          <div key={st.userId} className="flex items-center gap-2 py-1.5">
+                                              <span className="w-4 shrink-0 font-mono text-[11px] text-slate-600">{idx + 1}</span>
+                                              <span className="min-w-0 flex-1 truncate text-xs font-bold text-slate-200">{st.name}</span>
+                                              <span className="shrink-0 font-mono text-[11px] text-slate-400">{st.wins}W – {st.losses}L</span>
+                                          </div>
+                                      ))}
+                                  </div>
+                              )}
+                          </Card>
+                      ))}
+                  </div>
+              </div>
+
+              {rb.careers.length > 0 && (
+                  <div>
+                      <span className="eyebrow">All-time</span>
+                      <Card className="mt-2 divide-y divide-white/[0.05]">
+                          {rb.careers.map(c => (
+                              <div key={c.key} className="flex items-center gap-3 px-4 py-2.5">
+                                  <Avatar url={avatarOf(c.userId)} name={c.name} size="sm" />
+                                  <div className="min-w-0 flex-1">
+                                      <div className="truncate text-sm font-bold text-white">{c.name}</div>
+                                      <div className="font-mono text-[11px] text-slate-500">
+                                          {c.seasons > 0 ? `${c.seasons} season${c.seasons === 1 ? '' : 's'}` : 'Before the app'}
+                                      </div>
+                                  </div>
+                                  <div className="shrink-0 text-right">
+                                      {c.seasons > 0 && <div className="font-mono text-sm font-bold text-slate-200">{c.wins}W – {c.losses}L</div>}
+                                      {c.titles > 0 && (
+                                          <div className="flex items-center justify-end gap-1 font-mono text-[11px] font-bold text-gold-400">
+                                              <Trophy size={10}/>{c.titles}
+                                          </div>
+                                      )}
+                                  </div>
+                              </div>
+                          ))}
+                      </Card>
+                  </div>
+              )}
+          </div>
+      );
+  };
+
   const navItems = [
     { key: 'dashboard', label: 'League',   icon: Trophy },
     { key: 'team',      label: 'Team',     icon: Users },
     { key: 'matchups',  label: 'Matchups', icon: Swords },
     { key: 'market',    label: 'Market',   icon: BarChart3 },
+    { key: 'records',   label: 'Records',  icon: BookOpen },
     ...(activeMembership?.isAdmin ? [{ key: 'admin', label: 'Admin', icon: Settings }] : []),
   ];
 
@@ -3489,6 +3941,7 @@ export default function FiveStarApp() {
          {activeMembership && currentView === 'market' && renderMarket()}
          {activeMembership && currentView === 'team' && renderTeam()}
          {activeMembership && currentView === 'matchups' && renderMatchups()}
+         {activeMembership && currentView === 'records' && renderRecords()}
          {activeMembership?.isAdmin && currentView === 'admin' && renderAdmin()}
       </main>
 
