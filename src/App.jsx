@@ -697,6 +697,18 @@ export default function FiveStarApp() {
   const [nextSeason, setNextSeason] = useState({ seasonStart: '', seasonEnd: '' });
   const [pastTitle, setPastTitle] = useState({ label: '', name: '' });
 
+  // Tab swiping. `swipeNeighbor` is the only state the gesture touches, and only
+  // twice per swipe — mounting the incoming tab, then unmounting it. The drag
+  // itself writes transform straight to the node.
+  const swipeWrapRef = useRef(null);
+  const swipeTrackRef = useRef(null);
+  const gestureRef = useRef(null);
+  const settlingRef = useRef(false);
+  const [swipeNeighbor, setSwipeNeighbor] = useState(null);
+  const [isTouchDevice] = useState(() => {
+    try { return window.matchMedia('(pointer: coarse)').matches; } catch { return false; }
+  });
+
   // Install prompt
   const [showInstall, setShowInstall] = useState(false);
   const [installEvent, setInstallEvent] = useState(null);
@@ -3786,6 +3798,19 @@ export default function FiveStarApp() {
       );
   };
 
+  // One tab's content by key, so a swipe can mount the neighbouring tab alongside
+  // the current one without duplicating the routing.
+  const renderView = (key) => {
+      if (key === 'dashboard') return memberships.length === 0 ? renderOnboarding(false) : renderLeagueHub();
+      if (!activeMembership) return null;
+      if (key === 'market') return renderMarket();
+      if (key === 'team') return renderTeam();
+      if (key === 'matchups') return renderMatchups();
+      if (key === 'records') return renderRecords();
+      if (key === 'admin') return activeMembership.isAdmin ? renderAdmin() : null;
+      return null;
+  };
+
   const navItems = [
     { key: 'dashboard', label: 'League',   icon: Trophy },
     { key: 'team',      label: 'Team',     icon: Users },
@@ -3794,6 +3819,125 @@ export default function FiveStarApp() {
     { key: 'records',   label: 'Records',  icon: BookOpen },
     ...(activeMembership?.isAdmin ? [{ key: 'admin', label: 'Admin', icon: Settings }] : []),
   ];
+
+  // --- Swipe between tabs (touch only) -------------------------------------
+  // The content follows the finger rather than firing on release. The neighbouring
+  // tab is mounted the instant the gesture locks horizontal, and the track is
+  // moved by writing `transform` straight to the node — a React state update per
+  // touchmove is what makes this kind of gesture feel gluey, so there isn't one.
+  const swipeEnabled = isTouchDevice && !!activeMembership
+    && !selectedMatchup && !showProfile && !showLeagueCreator;
+
+  // Carousels and wide tables own their horizontal drags; stealing them would
+  // make those unusable.
+  const insideHorizontalScroller = (node) => {
+    let el = node;
+    while (el && el !== swipeWrapRef.current) {
+      if (el.scrollWidth > el.clientWidth + 1) {
+        const ox = getComputedStyle(el).overflowX;
+        if (ox === 'auto' || ox === 'scroll') return true;
+      }
+      el = el.parentElement;
+    }
+    return false;
+  };
+
+  // Animate the track to a resting place, then hand back to React. The timeout is
+  // a backstop: transitionend never fires when the value doesn't actually change.
+  const settleTrack = (toPx, ms, after) => {
+    const el = swipeTrackRef.current;
+    if (!el) { after(); return; }
+    settlingRef.current = true;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      el.removeEventListener('transitionend', finish);
+      settlingRef.current = false;
+      after();
+    };
+    el.addEventListener('transitionend', finish);
+    setTimeout(finish, ms + 100);
+    requestAnimationFrame(() => {
+      el.style.transition = `transform ${ms}ms cubic-bezier(0.22, 0.61, 0.36, 1)`;
+      el.style.transform = `translate3d(${toPx}px, 0, 0)`;
+    });
+  };
+
+  const clearTrack = () => {
+    const el = swipeTrackRef.current;
+    if (el) {
+      el.style.transition = '';
+      el.style.transform = '';
+      el.style.willChange = '';
+    }
+    setSwipeNeighbor(null);
+  };
+
+  const onSwipeStart = (e) => {
+    if (!swipeEnabled || settlingRef.current || e.touches.length !== 1) return;
+    if (insideHorizontalScroller(e.target)) return;
+    const t = e.touches[0];
+    gestureRef.current = {
+      x0: t.clientX, y0: t.clientY, t0: Date.now(),
+      dx: 0, axis: null, dir: 0, neighbor: null,
+      width: swipeWrapRef.current?.clientWidth || window.innerWidth,
+    };
+  };
+
+  const onSwipeMove = (e) => {
+    const g = gestureRef.current;
+    if (!g || e.touches.length !== 1) return;
+    const t = e.touches[0];
+    const dx = t.clientX - g.x0;
+    const dy = t.clientY - g.y0;
+
+    if (g.axis === null) {
+      // Wait for enough travel to tell a scroll from a swipe, then commit to one
+      // for the rest of the gesture so the page can't wobble diagonally.
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      if (Math.abs(dx) <= Math.abs(dy) * 1.2) { g.axis = 'y'; return; }
+
+      const keys = navItems.map(i => i.key);
+      const dir = dx < 0 ? 1 : -1;
+      const neighbor = keys[keys.indexOf(currentView) + dir];
+      if (!neighbor) { g.axis = 'y'; return; }   // no tab that way — let it scroll
+
+      g.axis = 'x';
+      g.dir = dir;
+      g.neighbor = neighbor;
+      if (swipeTrackRef.current) swipeTrackRef.current.style.willChange = 'transform';
+      // Park the incoming tab's top at the top of the viewport rather than at the
+      // track's, or a page scrolled halfway down would slide in mid-article.
+      const rect = swipeWrapRef.current?.getBoundingClientRect();
+      setSwipeNeighbor({ key: neighbor, dir, top: Math.max(0, -(rect?.top || 0)) });
+    }
+    if (g.axis !== 'x') return;
+
+    g.dx = dx;
+    if (swipeTrackRef.current) {
+      swipeTrackRef.current.style.transition = '';
+      swipeTrackRef.current.style.transform = `translate3d(${dx}px, 0, 0)`;
+    }
+  };
+
+  const onSwipeEnd = () => {
+    const g = gestureRef.current;
+    gestureRef.current = null;
+    if (!g || g.axis !== 'x' || !g.neighbor) return;
+
+    // Either drag it most of the way, or flick it — a short fast swipe should
+    // count, which distance alone would reject.
+    const speed = Math.abs(g.dx) / Math.max(1, Date.now() - g.t0);
+    const commit = Math.abs(g.dx) > g.width * 0.28 || (speed > 0.45 && Math.abs(g.dx) > 40);
+
+    if (!commit) { settleTrack(0, 180, clearTrack); return; }
+    settleTrack(-g.dir * g.width, 200, () => {
+      clearTrack();
+      navigateTo(g.neighbor);
+      window.scrollTo(0, 0);
+    });
+  };
 
   return (
     <div className="relative min-h-screen pb-28">
@@ -3936,13 +4080,36 @@ export default function FiveStarApp() {
           </div>
       )}
 
-      <main className="mx-auto max-w-2xl p-4">
-         {currentView === 'dashboard' && (memberships.length === 0 ? renderOnboarding(false) : renderLeagueHub())}
-         {activeMembership && currentView === 'market' && renderMarket()}
-         {activeMembership && currentView === 'team' && renderTeam()}
-         {activeMembership && currentView === 'matchups' && renderMatchups()}
-         {activeMembership && currentView === 'records' && renderRecords()}
-         {activeMembership?.isAdmin && currentView === 'admin' && renderAdmin()}
+      <main
+        ref={swipeWrapRef}
+        onTouchStart={onSwipeStart}
+        onTouchMove={onSwipeMove}
+        onTouchEnd={onSwipeEnd}
+        onTouchCancel={onSwipeEnd}
+        className="relative"
+        style={{
+          // `pan-y` hands vertical scrolling back to the browser and reserves
+          // horizontal for us. React attaches touch listeners passively, so
+          // preventDefault is not available — this is what replaces it.
+          touchAction: swipeEnabled ? 'pan-y' : undefined,
+          // Clip only while a neighbour is mounted. `clip` rather than `hidden`:
+          // hidden would make this a scroll container and strand the Market tab's
+          // sticky filter bar.
+          overflowX: swipeNeighbor ? 'clip' : undefined,
+        }}
+      >
+         <div ref={swipeTrackRef} className="relative">
+            <div className="mx-auto max-w-2xl p-4">{renderView(currentView)}</div>
+            {swipeNeighbor && (
+               <div
+                 aria-hidden="true"
+                 className="absolute w-full"
+                 style={{ top: swipeNeighbor.top, left: swipeNeighbor.dir > 0 ? '100%' : '-100%' }}
+               >
+                  <div className="mx-auto max-w-2xl p-4">{renderView(swipeNeighbor.key)}</div>
+               </div>
+            )}
+         </div>
       </main>
 
       {installBanner(true)}
