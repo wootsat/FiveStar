@@ -47,6 +47,26 @@ That's two from two for Omaha, who are starting to look like a team that knows s
 The Giants level up at 1-1 and look steady. Wolf Lady drops to 0-2, which is early enough not to panic and late enough to start reading the standings with one eye closed. Two months is a slump. Three is a personality.`,
       },
     ],
+    '2026-07': [
+      {
+        teams: ['Wolf Lady', 'YOLO Kings'],
+        title: 'Green by a Whisker',
+        text: `+0.87% is not a number anyone frames. In July it was the only green figure in the entire league — three of the four teams finished the month underwater, and the YOLO Kings cleared the bar by less than a point. Wolf Lady came in at -6.27%, and seven points of daylight settled it comfortably.
+
+The two books could not have been built more differently. The Kings went into July holding three positions; Wolf Lady held eight. Both leaned on Apple, which did neither of them any favours. But where Wolf Lady's spread meant the bad news arrived from six directions at once, the Kings simply had fewer places to bleed from. In a month like this one, that turned out to be the entire strategy.
+
+The Kings move to 2-1 and are quietly the most sensible team in the league. Wolf Lady falls to 0-3. Last month we suggested that two months is a slump and three is a personality. July has gone ahead and made that call for us.`,
+      },
+      {
+        teams: ['Omaha Lions', 'Investment Giants'],
+        title: 'Undefeated and Underwater',
+        text: `The Omaha Lions lost 9.38% in July and won their matchup by six and a half points. That is the kind of month it was. The Investment Giants finished at -15.86%, and this was less a contest of who played well than of who flinched less.
+
+That -15.86% is the worst single month the league has on record, and it belongs to the same season that produced Omaha's +52.54% in May. Sixty-eight points separate the ceiling and the floor of this league's record book, and both entries were written inside ten weeks of each other.
+
+Omaha move to 3-0, which is the genuinely strange part. They are the only undefeated team in the league and they got there in July by handing back nearly a tenth of the portfolio. Nobody is putting that on a banner. It counts the same in the standings. The Giants drop to 1-2.`,
+      },
+    ],
   },
 };
 

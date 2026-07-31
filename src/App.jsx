@@ -2875,7 +2875,11 @@ export default function FiveStarApp() {
                         const frozen = snap?.teams?.[uid];
                         if (!player && !frozen) return null;
                         const name = frozen?.name || player?.name || 'Player';
-                        const roster = frozen?.roster || player?.roster || [];
+                        // A ticker with no shares is an empty slot, not a position.
+                        // Listed alongside real holdings it reads as one — with a
+                        // price move attached that never touched the team's score.
+                        const roster = (frozen?.roster || player?.roster || [])
+                            .filter(item => (parseFloat(item.shares) || 0) > 0);
                         const cash = frozen ? (Number(frozen.cash) || 0) : (parseFloat(player?.cash) || 0);
                         const total = frozen ? (Number(frozen.endValue) || 0) : portfolioValueOf(player);
                         const isWinner = m.scored && (uid === m.p1 ? m.p1Score > m.p2Score : m.p2Score > m.p1Score);
