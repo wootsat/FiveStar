@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import {
   TrendingUp, Trophy, Plus, Minus, RefreshCw, Shield, Crown, PlayCircle, Lock, LogOut, CheckCircle2, RotateCcw, Search, Save, DollarSign, Wallet, Users, BarChart3, PieChart, Settings, ArrowRight, Copy, Swords, ChevronLeft, Calendar, Edit2, Trash2, User, Upload, X, ArrowUp, ArrowDown, ArrowUpDown, Medal, Sparkles, Activity, CircleDollarSign, BookOpen, TrendingDown, ChevronDown
 } from 'lucide-react';
@@ -704,9 +704,26 @@ export default function FiveStarApp() {
   const swipeTrackRef = useRef(null);
   const gestureRef = useRef(null);
   const settlingRef = useRef(false);
+  const pendingSwapRef = useRef(false);
   const [swipeNeighbor, setSwipeNeighbor] = useState(null);
   const [isTouchDevice] = useState(() => {
     try { return window.matchMedia('(pointer: coarse)').matches; } catch { return false; }
+  });
+
+  // A completed swipe leaves the track parked off to one side, holding the
+  // incoming tab in view. Clearing that transform has to happen after React has
+  // put the new tab in the flow slot but before the browser paints — do it any
+  // earlier and the outgoing tab snaps back into view for a frame.
+  useLayoutEffect(() => {
+    if (!pendingSwapRef.current) return;
+    pendingSwapRef.current = false;
+    const el = swipeTrackRef.current;
+    if (el) {
+      el.style.transition = '';
+      el.style.transform = '';
+      el.style.willChange = '';
+    }
+    window.scrollTo(0, 0);
   });
 
   // Install prompt
@@ -3932,10 +3949,12 @@ export default function FiveStarApp() {
     const commit = Math.abs(g.dx) > g.width * 0.28 || (speed > 0.45 && Math.abs(g.dx) > 40);
 
     if (!commit) { settleTrack(0, 180, clearTrack); return; }
+    // Leave the track exactly where the animation finished. The layout effect
+    // above resets it in the same frame that the new tab is mounted.
     settleTrack(-g.dir * g.width, 200, () => {
-      clearTrack();
+      pendingSwapRef.current = true;
+      setSwipeNeighbor(null);
       navigateTo(g.neighbor);
-      window.scrollTo(0, 0);
     });
   };
 
