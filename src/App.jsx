@@ -1315,6 +1315,33 @@ export default function FiveStarApp() {
       return total;
   };
 
+  // How much a team's book moved today: current prices against yesterday's
+  // closes, with cash held constant. Null until quotes carry a previous close,
+  // or when the team holds nothing priced.
+  const dayChangeOf = (player) => {
+      const cash = parseFloat(player?.cash) || 0;
+      let today = cash;
+      let yesterday = cash;
+      let priced = false;
+      (player?.roster || []).forEach(item => {
+          const shares = parseFloat(item.shares) || 0;
+          const now = Number(liveMarketData[item.id]?.c) || 0;
+          const prev = Number(liveMarketData[item.id]?.pc) || 0;
+          if (now > 0 && prev > 0) {
+              priced = true;
+              today += shares * now;
+              yesterday += shares * prev;
+          } else {
+              // Unknown mover — carry it at one price so it cancels out.
+              const flat = priceOf(item.id);
+              today += shares * flat;
+              yesterday += shares * flat;
+          }
+      });
+      if (!priced || yesterday <= 0) return null;
+      return ((today - yesterday) / yesterday) * 100;
+  };
+
   // A stock's move since the month opened, used in the matchup breakdown.
   const stockMonthChange = (stockId) => {
       const base = activeLeague?.startingPrices?.[stockId] || liveMarketData[stockId]?.monthOpen;
@@ -2112,6 +2139,7 @@ export default function FiveStarApp() {
                   <div className="divide-y divide-white/[0.05]">
                       {standings.map((p, idx) => {
                           const currentReturn = calculateReturn(p.roster, p.cash, activeLeague?.startingPrices || {}, p.startValue);
+                          const dayChange = dayChangeOf(p);
                           const isMe = p.userId === user?.uid;
                           return (
                           <div key={p.userId} className={`flex items-center gap-3 px-4 py-3 transition ${isMe ? 'bg-gold-400/[0.05]' : ''}`}>
@@ -2131,7 +2159,15 @@ export default function FiveStarApp() {
                                       {p.losses || 0}<span className="text-slate-500">L</span>
                                   </div>
                               </div>
-                              <Pct value={currentReturn} className="text-base" />
+                              <div className="shrink-0 text-right">
+                                  <Pct value={currentReturn} className="text-base" />
+                                  {dayChange !== null && (
+                                      <div className="mt-0.5 flex items-center justify-end gap-1">
+                                          <span className="eyebrow">Today</span>
+                                          <Pct value={dayChange} className="text-[11px]" />
+                                      </div>
+                                  )}
+                              </div>
                           </div>
                           );
                       })}
@@ -2602,6 +2638,8 @@ export default function FiveStarApp() {
         // A scored month has a winner; an open one only has someone in front.
         const isFinal = !!m.scored;
 
+        const detailDay = (uid) => dayChangeOf(leaguePlayers.find(p => p.userId === uid));
+
         // A closed month has its books frozen at close. Read those rather than
         // live rosters and prices, which have moved on since.
         const snap = activeLeague?.monthSnapshots?.[viewedMonth];
@@ -2639,6 +2677,12 @@ export default function FiveStarApp() {
                             <div className={`font-mono text-4xl font-extrabold tracking-tightest ${m.p1Score >= 0 ? 'text-gain' : 'text-loss'}`}>
                                 {m.p1Score > 0 ? '+' : ''}{m.p1Score}%
                             </div>
+                            {!isFinal && detailDay(m.p1) !== null && (
+                                <div className="mt-1 flex items-center justify-center gap-1">
+                                    <span className="eyebrow">Today</span>
+                                    <Pct value={detailDay(m.p1)} className="text-[11px]" />
+                                </div>
+                            )}
                             {p1Leads && (isFinal
                                 ? <div className="mt-2 flex items-center justify-center gap-1 text-gold-400"><Trophy size={13}/><span className="eyebrow text-gold-400">Winner</span></div>
                                 : <div className="eyebrow mt-2 text-gold-400">Leading</div>)}
@@ -2654,9 +2698,17 @@ export default function FiveStarApp() {
                             <Avatar url={avatarFor(m.p2)} name={m.p2Name} size="lg" className={`mx-auto mb-3 ${p2Leads ? 'ring-gold-400/70' : ''}`} />
                             <div className="mb-2 truncate text-base font-bold text-white">{m.p2Name}</div>
                             {!isBye ? (
+                                <>
                                 <div className={`font-mono text-4xl font-extrabold tracking-tightest ${m.p2Score >= 0 ? 'text-gain' : 'text-loss'}`}>
                                     {m.p2Score > 0 ? '+' : ''}{m.p2Score}%
                                 </div>
+                                {!isFinal && detailDay(m.p2) !== null && (
+                                    <div className="mt-1 flex items-center justify-center gap-1">
+                                        <span className="eyebrow">Today</span>
+                                        <Pct value={detailDay(m.p2)} className="text-[11px]" />
+                                    </div>
+                                )}
+                                </>
                             ) : (
                                 <div className="font-mono text-4xl font-extrabold text-slate-700">—</div>
                             )}
@@ -2804,6 +2856,9 @@ export default function FiveStarApp() {
                 const final = !!m.scored;
                 const p1Won = final && (isBye || p1Leads);
                 const p2Won = final && p2Leads;
+                // "Today" only means something while the month is still running.
+                const p1Day = final ? null : dayChangeOf(leaguePlayers.find(p => p.userId === m.p1));
+                const p2Day = final || isBye ? null : dayChangeOf(leaguePlayers.find(p => p.userId === m.p2));
 
                 return (
                     <Card key={i} className={`p-4 ${mine ? 'ring-gold-400/25' : ''}`}
@@ -2830,6 +2885,12 @@ export default function FiveStarApp() {
                                         {p1Won && <Trophy size={12} className="shrink-0 text-gold-400" aria-label="Winner" />}
                                     </div>
                                     <Pct value={p1LiveScore} className="text-sm" />
+                                    {p1Day !== null && (
+                                        <div className="mt-0.5 flex items-center gap-1">
+                                            <span className="eyebrow">Today</span>
+                                            <Pct value={p1Day} className="text-[10px]" />
+                                        </div>
+                                    )}
                                 </div>
                             </div>
 
@@ -2842,6 +2903,12 @@ export default function FiveStarApp() {
                                         <span className={`truncate text-sm font-bold ${p2Leads ? 'text-white' : 'text-slate-300'}`}>{m.p2Name}</span>
                                     </div>
                                     {isBye ? <span className="font-mono text-sm font-bold text-slate-600">—</span> : <Pct value={p2LiveScore} className="text-sm" />}
+                                    {p2Day !== null && (
+                                        <div className="mt-0.5 flex items-center justify-end gap-1">
+                                            <span className="eyebrow">Today</span>
+                                            <Pct value={p2Day} className="text-[10px]" />
+                                        </div>
+                                    )}
                                 </div>
                                 <Avatar url={avatarFor(m.p2)} name={m.p2Name} size="sm" className={p2Leads ? 'ring-gold-400/60' : ''} />
                             </div>
