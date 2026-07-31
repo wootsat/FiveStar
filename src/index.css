@@ -16,7 +16,8 @@
 
   /* Every figure in the app is tabular so columns of numbers line up. */
   .font-mono,
-  input[type='number'] {
+  input[type='number'],
+  input[inputmode='decimal'] {
     font-variant-numeric: tabular-nums;
   }
 

@@ -471,6 +471,19 @@ const InstallBanner = ({ platform, canPrompt, onInstall, onDismiss, hasNav }) =>
   </div>
 );
 
+// Number fields frequently sit at 0. Selecting on focus means typing replaces
+// the value instead of appending to it — no more "05" when you meant 5.
+//
+// These are text inputs with a numeric keypad rather than type="number":
+// the HTML spec gives number inputs no selection API, so select() is a no-op
+// on them and the leading zero survives. Every handler already parses the
+// string, so nothing downstream changes.
+const selectOnFocus = (e) => {
+  const el = e.target;
+  // Defer: iOS Safari collapses the caret if you select during the focus event.
+  setTimeout(() => { try { el.select(); } catch { /* not selectable */ } }, 0);
+};
+
 const logoFallback = (e) => {
   e.target.onerror = null;
   e.target.src = "https://placehold.co/100x100/fbbf24/08090c?text=5";
@@ -1880,7 +1893,7 @@ export default function FiveStarApp() {
                           <label className="eyebrow mb-1.5 block">Number of players</label>
                           <div className="flex items-center gap-2">
                               <button type="button" onClick={() => patch({ maxPlayers: Math.max(2, Number(draft.maxPlayers) - 1) })} className="btn-ghost h-11 w-11 p-0"><Minus size={16}/></button>
-                              <input type="number" min="2" max="20" value={draft.maxPlayers} onChange={e => patch({ maxPlayers: e.target.value })} className="field text-center font-mono text-lg font-bold" />
+                              <input type="text" inputMode="decimal" onFocus={selectOnFocus} min="2" max="20" value={draft.maxPlayers} onChange={e => patch({ maxPlayers: e.target.value })} className="field text-center font-mono text-lg font-bold" />
                               <button type="button" onClick={() => patch({ maxPlayers: Math.min(20, Number(draft.maxPlayers) + 1) })} className="btn-ghost h-11 w-11 p-0"><Plus size={16}/></button>
                           </div>
                           <p className="mt-1.5 text-xs text-slate-600">The league stops accepting joins once it's full.</p>
@@ -1917,7 +1930,7 @@ export default function FiveStarApp() {
                           <label className="eyebrow mb-1.5 block">Monthly allowance per player</label>
                           <div className="relative">
                               <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 font-mono text-slate-500">$</span>
-                              <input type="number" min="1" value={draft.monthlyAllowance} onChange={e => patch({ monthlyAllowance: e.target.value })} className="field pl-8 font-mono text-lg font-bold" />
+                              <input type="text" inputMode="decimal" onFocus={selectOnFocus} min="1" value={draft.monthlyAllowance} onChange={e => patch({ monthlyAllowance: e.target.value })} className="field pl-8 font-mono text-lg font-bold" />
                           </div>
                           <p className="mt-1.5 text-xs text-slate-600">Deposited into every player's cash at the start of each month. Holdings carry over.</p>
                       </div>
@@ -2522,7 +2535,7 @@ export default function FiveStarApp() {
                                   <div className="mt-1 flex items-center font-mono text-sm font-bold text-white">
                                       <span className="text-slate-500">$</span>
                                       <input
-                                          type="number"
+                                          type="text" inputMode="decimal" onFocus={selectOnFocus}
                                           value={cash}
                                           onChange={e => updateCash(e.target.value)}
                                           className="w-full border-b border-gold-400/50 bg-transparent pb-px focus:border-gold-400 focus:outline-none"
@@ -2588,7 +2601,7 @@ export default function FiveStarApp() {
                             <span className="eyebrow">{isOpen ? 'Shares' : 'Shares — locked'}</span>
                             {isOpen ? (
                                 <input
-                                    type="number"
+                                    type="text" inputMode="decimal" onFocus={selectOnFocus}
                                     value={item.shares}
                                     onChange={(e) => updateShares(item.id, e.target.value)}
                                     className="w-28 rounded bg-transparent text-right font-mono text-sm font-bold text-white focus:outline-none"
@@ -3053,7 +3066,7 @@ export default function FiveStarApp() {
                           <div className="flex items-center gap-1">
                               <span className="font-mono text-xs text-slate-500">$</span>
                               <input
-                                  type="number"
+                                  type="text" inputMode="decimal" onFocus={selectOnFocus}
                                   defaultValue={p.startValue}
                                   onBlur={(e) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'league_players', p.id), { startValue: parseFloat(e.target.value) })}
                                   className="field-sm w-28 py-1.5 text-right font-mono"
@@ -3073,11 +3086,11 @@ export default function FiveStarApp() {
                           <div className="flex items-center gap-2">
                               <label className="flex items-center gap-1.5">
                                   <span className="eyebrow">W</span>
-                                  <input type="number" defaultValue={p.wins} onBlur={(e) => handleUpdatePlayerStats(p.id, 'wins', e.target.value)} className="field-sm w-14 py-1.5 text-center font-mono" />
+                                  <input type="text" inputMode="decimal" onFocus={selectOnFocus} defaultValue={p.wins} onBlur={(e) => handleUpdatePlayerStats(p.id, 'wins', e.target.value)} className="field-sm w-14 py-1.5 text-center font-mono" />
                               </label>
                               <label className="flex items-center gap-1.5">
                                   <span className="eyebrow">L</span>
-                                  <input type="number" defaultValue={p.losses} onBlur={(e) => handleUpdatePlayerStats(p.id, 'losses', e.target.value)} className="field-sm w-14 py-1.5 text-center font-mono" />
+                                  <input type="text" inputMode="decimal" onFocus={selectOnFocus} defaultValue={p.losses} onBlur={(e) => handleUpdatePlayerStats(p.id, 'losses', e.target.value)} className="field-sm w-14 py-1.5 text-center font-mono" />
                               </label>
                           </div>
                       </div>
@@ -3147,7 +3160,7 @@ export default function FiveStarApp() {
                                   <div className="flex items-center gap-1">
                                       <span className="font-mono text-xs text-slate-500">$</span>
                                       <input
-                                          type="number" step="0.01" min="0"
+                                          type="text" inputMode="decimal" onFocus={selectOnFocus} step="0.01" min="0"
                                           defaultValue={seasonOpen > 0 ? seasonOpen : ''}
                                           placeholder="0.00"
                                           onBlur={(e) => {
@@ -3285,7 +3298,7 @@ export default function FiveStarApp() {
                                           <div className="truncate text-xs font-bold text-slate-300">{m.p1Name}</div>
                                           <div className="mt-1 flex items-center">
                                               <input
-                                                  type="number" step="0.01"
+                                                  type="text" inputMode="decimal" onFocus={selectOnFocus} step="0.01"
                                                   value={backfillScores[`${i}_p1`] ?? ''}
                                                   onChange={e => setBackfillScores(s => ({ ...s, [`${i}_p1`]: e.target.value }))}
                                                   className="field-sm w-full py-1.5 text-right font-mono"
@@ -3302,7 +3315,7 @@ export default function FiveStarApp() {
                                           ) : (
                                               <div className="mt-1 flex items-center">
                                                   <input
-                                                      type="number" step="0.01"
+                                                      type="text" inputMode="decimal" onFocus={selectOnFocus} step="0.01"
                                                       value={backfillScores[`${i}_p2`] ?? ''}
                                                       onChange={e => setBackfillScores(s => ({ ...s, [`${i}_p2`]: e.target.value }))}
                                                       className="field-sm w-full py-1.5 text-right font-mono"
