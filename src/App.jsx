@@ -162,6 +162,7 @@ const SERIES_COLORS = ['#d97706', '#0891b2', '#6366f1', '#e11d48', '#15803d', '#
 
 const fmtAxisMoney = (v) => Math.abs(v) >= 1000 ? `$${(v / 1000).toFixed(1)}k` : `$${v.toFixed(0)}`;
 const fmtFullMoney = (v) => `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+const fmtWholeMoney = (v) => `$${Math.round(Number(v) || 0).toLocaleString()}`;
 const fmtPct = (v) => `${Number(v) > 0 ? '+' : ''}${Number(v).toFixed(2)}%`;
 
 // --- Seasons ---
@@ -2547,10 +2548,21 @@ export default function FiveStarApp() {
                                       {isMe && <span className="eyebrow text-gold-400">You</span>}
                                       {p.isAdmin && <Crown size={12} className="shrink-0 text-gold-400"/>}
                                   </div>
-                                  <div className="mt-0.5 font-mono text-sm font-medium text-slate-300">
-                                      {p.wins || 0}<span className="text-slate-500">W</span>
-                                      <span className="text-slate-600"> · </span>
-                                      {p.losses || 0}<span className="text-slate-500">L</span>
+                                  {/* The portfolio value rides on the record line
+                                      rather than taking a column of its own: a
+                                      fifth column costs the name ~45px, which is
+                                      enough to clip a two-word team name on a
+                                      phone. Whole dollars — cents add four
+                                      characters to a figure read at a glance. */}
+                                  <div className="mt-0.5 flex items-baseline gap-2">
+                                      <span className="font-mono text-sm font-medium text-slate-300">
+                                          {p.wins || 0}<span className="text-slate-500">W</span>
+                                          <span className="text-slate-600"> · </span>
+                                          {p.losses || 0}<span className="text-slate-500">L</span>
+                                      </span>
+                                      <span className="ml-auto font-mono text-base font-extrabold text-white">
+                                          {fmtWholeMoney(portfolioValueOf(p))}
+                                      </span>
                                   </div>
                               </div>
                               <div className="shrink-0 text-right">
