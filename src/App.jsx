@@ -697,6 +697,7 @@ export default function FiveStarApp() {
   const [backfillScores, setBackfillScores] = useState({});
   const [nextSeason, setNextSeason] = useState({ seasonStart: '', seasonEnd: '' });
   const [pastTitle, setPastTitle] = useState({ label: '', name: '' });
+  const [teamDrafts, setTeamDrafts] = useState({});
 
   // Tab swiping. `swipeNeighbor` is the only state the gesture touches, and only
   // twice per swipe — mounting the incoming tab, then unmounting it. The drag
@@ -1437,6 +1438,25 @@ export default function FiveStarApp() {
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'league_players', `${activeMembership.leagueId}_${user.uid}`);
       await updateDoc(docRef, { cash: cash });
   };
+
+  // Cash and share fields write to Firestore as you type and display whatever
+  // came back, which makes a decimal point impossible to enter: parseFloat('12.')
+  // is 12, so the dot is erased the moment it's typed. Hold the raw text while
+  // the field is focused and let go of it on blur, so the number still commits on
+  // every keystroke but the caret keeps whatever was actually typed.
+  const draftField = (key, stored, commit) => ({
+      value: teamDrafts[key] ?? String(stored ?? ''),
+      onChange: (e) => {
+          const raw = e.target.value;
+          setTeamDrafts(d => ({ ...d, [key]: raw }));
+          commit(raw);
+      },
+      onBlur: () => setTeamDrafts(d => {
+          const next = { ...d };
+          delete next[key];
+          return next;
+      }),
+  });
 
   const removeFromTeam = async (stockId) => {
       const roster = activeMembership.roster.filter((i) => i.id !== stockId);
@@ -2897,8 +2917,7 @@ export default function FiveStarApp() {
                                       <span className="text-slate-500">$</span>
                                       <input
                                           type="text" inputMode="decimal" onFocus={selectOnFocus}
-                                          value={cash}
-                                          onChange={e => updateCash(e.target.value)}
+                                          {...draftField('cash', cash, updateCash)}
                                           className="w-full border-b border-gold-400/50 bg-transparent pb-px focus:border-gold-400 focus:outline-none"
                                       />
                                   </div>
@@ -2963,8 +2982,7 @@ export default function FiveStarApp() {
                             {isOpen ? (
                                 <input
                                     type="text" inputMode="decimal" onFocus={selectOnFocus}
-                                    value={item.shares}
-                                    onChange={(e) => updateShares(item.id, e.target.value)}
+                                    {...draftField(`shares_${item.id}`, item.shares, (v) => updateShares(item.id, v))}
                                     className="w-28 rounded bg-transparent text-right font-mono text-sm font-bold text-white focus:outline-none"
                                     placeholder="0"
                                 />
