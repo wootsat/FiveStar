@@ -3054,6 +3054,18 @@ export default function FiveStarApp() {
             const close = Number(snap.endPrices?.[id]);
             return open > 0 && close > 0 ? ((close - open) / open) * 100 : null;
         };
+        // Today's move only means something while the month is still running. A
+        // frozen book is a record of a day that closed long ago, so it gets none.
+        const dayIn = (id) => {
+            if (snap) return null;
+            // A sweep stores dp:null when Finnhub omits it, and Number(null) is 0
+            // — test the raw value or an absent reading reports a flat day.
+            const dp = liveMarketData[id]?.dp;
+            if (dp !== null && dp !== undefined && Number.isFinite(Number(dp))) return Number(dp);
+            const now = Number(liveMarketData[id]?.c);
+            const prev = Number(liveMarketData[id]?.pc);
+            return now > 0 && prev > 0 ? ((now - prev) / prev) * 100 : null;
+        };
 
         return (
             <div className="animate-fade-up space-y-4">
@@ -3184,6 +3196,7 @@ export default function FiveStarApp() {
                                     <div className="flex-1 divide-y divide-white/[0.05]">
                                         {roster.map(item => {
                                             const change = changeIn(item.id);
+                                            const day = dayIn(item.id);
                                             const price = priceIn(item.id);
                                             const value = (parseFloat(item.shares) || 0) * price;
                                             return (
@@ -3201,6 +3214,12 @@ export default function FiveStarApp() {
                                                             ? <span className="font-mono text-[10px] text-slate-600">—</span>
                                                             : <Pct value={change} className="shrink-0 text-[10px]" />}
                                                     </div>
+                                                    {day !== null && (
+                                                        <div className="flex items-baseline justify-between gap-1">
+                                                            <span className="eyebrow">Today</span>
+                                                            <Pct value={day} className="shrink-0 text-[10px]" />
+                                                        </div>
+                                                    )}
                                                 </div>
                                             );
                                         })}
