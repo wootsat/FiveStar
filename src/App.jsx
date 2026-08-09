@@ -494,6 +494,39 @@ const detectPlatform = () => {
   return { iOS, android, mobile: iOS || android };
 };
 
+// Vite fingerprints the entry bundle, so the filename in the deployed index.html
+// is already a version stamp — no build-time constant needed. Returns the running
+// bundle's filename, or null under the dev server where there isn't one.
+const runningBundle = () => {
+  const src = document.querySelector('script[type="module"][src*="/assets/index-"]')?.getAttribute('src');
+  return src ? src.split('/').pop() : null;
+};
+
+const deployedBundle = async () => {
+  // no-store, or the ten-minute cache on index.html would hide a fresh deploy.
+  const res = await fetch(`${import.meta.env.BASE_URL}index.html`, { cache: 'no-store' });
+  if (!res.ok) return null;
+  return (await res.text()).match(/index-[A-Za-z0-9_-]+\.js/)?.[0] || null;
+};
+
+const UpdateBanner = ({ onReload, onDismiss, hasNav }) => (
+  <div className={`pb-safe fixed inset-x-0 z-40 px-3 pb-2 ${hasNav ? 'bottom-[68px]' : 'bottom-0'}`}>
+    <div className="surface mx-auto flex max-w-lg animate-fade-up items-center gap-3 p-3.5 shadow-lift">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gold-400/15 ring-1 ring-gold-400/30">
+        <RefreshCw size={16} className="text-gold-300" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <h3 className="text-sm font-extrabold tracking-tight text-white">A new version is ready</h3>
+        <p className="text-xs text-slate-400">Reload to pick up the latest scores and fixes.</p>
+      </div>
+      <button onClick={onReload} className="btn-gold shrink-0 px-3 py-1.5 text-xs">Reload</button>
+      <button onClick={onDismiss} aria-label="Dismiss" className="shrink-0 text-slate-600 transition hover:text-white">
+        <X size={16}/>
+      </button>
+    </div>
+  </div>
+);
+
 const InstallBanner = ({ platform, canPrompt, onInstall, onDismiss, hasNav }) => (
   <div className={`pb-safe fixed inset-x-0 z-40 px-3 pb-2 ${hasNav ? 'bottom-[68px]' : 'bottom-0'}`}>
     <div className="surface mx-auto max-w-lg animate-fade-up p-4 shadow-lift">
@@ -699,6 +732,8 @@ export default function FiveStarApp() {
   const [nextSeason, setNextSeason] = useState({ seasonStart: '', seasonEnd: '' });
   const [pastTitle, setPastTitle] = useState({ label: '', name: '' });
   const [teamDrafts, setTeamDrafts] = useState({});
+  const [newBundle, setNewBundle] = useState(null);
+  const dismissedBundleRef = useRef(null);
 
   // Tab swiping. `swipeNeighbor` is the only state the gesture touches, and only
   // twice per swipe — mounting the incoming tab, then unmounting it. The drag
@@ -894,6 +929,50 @@ export default function FiveStarApp() {
       batch.commit().catch(err => console.error('Value snapshot failed:', err));
     }
   }, [liveMarketData, activeLeague?.status, activeLeague?.currentMonth, leaguePlayers.length]);
+
+  // An installed app resumed from the background never re-fetches anything — it
+  // restores the page it already had, so it can sit on an old build for days.
+  // There's no service worker to announce a new one, so compare the deployed
+  // bundle's fingerprint against the running one.
+  //
+  // A new build is applied as soon as it's noticed — on launch, whenever the app
+  // comes forward, and on a slow poll for a session left open. Reloading mid-edit
+  // can cost someone a half-typed share count; that's an accepted trade, since
+  // almost all of the time people are reading rather than entering.
+  useEffect(() => {
+    const running = runningBundle();
+    if (!running) return;   // dev server — no fingerprinted bundle to compare
+    let cancelled = false;
+
+    const check = async () => {
+      if (document.visibilityState !== 'visible') return;
+      let latest;
+      try {
+        latest = await deployedBundle();
+      } catch { return; }   // offline or blocked — try again next time
+      if (cancelled || !latest || latest === running) return;
+
+      // Guard against a reload loop: if we already reloaded for this build and
+      // are somehow still running the old one, stop and hand it to the user.
+      // Without this, a persistent mismatch would reload the app forever.
+      if (latest === sessionStorage.getItem('fivestar_reloaded_for')) {
+        if (latest !== dismissedBundleRef.current) setNewBundle(latest);
+        return;
+      }
+      try { sessionStorage.setItem('fivestar_reloaded_for', latest); } catch { /* private mode */ }
+      window.location.reload();
+    };
+
+    check();
+    const id = setInterval(check, 30 * 60 * 1000);
+    const onVisible = () => { if (document.visibilityState === 'visible') check(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, []);
 
   // --- 1. Authentication & Pre-fetching ---
 
@@ -2110,6 +2189,16 @@ export default function FiveStarApp() {
 
   // Rendered on the signed-out screens too — a brand-new visitor is exactly who
   // this is for, and they haven't got past the login form yet.
+  // One banner at a time — they occupy the same slot above the nav. The install
+  // prompt is the rarer, more time-limited of the two, so it wins.
+  const updateBanner = (hasNav) => (newBundle && !showInstall) ? (
+      <UpdateBanner
+        hasNav={hasNav}
+        onReload={() => window.location.reload()}
+        onDismiss={() => { dismissedBundleRef.current = newBundle; setNewBundle(null); }}
+      />
+  ) : null;
+
   const installBanner = (hasNav) => showInstall ? (
       <InstallBanner
         platform={platformRef.current}
@@ -2158,6 +2247,7 @@ export default function FiveStarApp() {
     </AuthShell>
     {/* Outside AuthShell: its card carries a transform, which would trap a fixed child. */}
     {installBanner(false)}
+    {updateBanner(false)}
     </>
   );
 
@@ -4185,6 +4275,7 @@ export default function FiveStarApp() {
       </main>
 
       {installBanner(true)}
+      {updateBanner(true)}
 
       <nav className="pb-safe fixed inset-x-0 bottom-0 z-30 border-t border-white/[0.07] bg-ink-950/85 backdrop-blur-xl">
         <div className="mx-auto flex h-[68px] max-w-lg items-stretch justify-between px-3">
