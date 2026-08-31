@@ -756,6 +756,7 @@ export default function FiveStarApp() {
   // Real Data
   const rateLimitedUntilRef = useRef(0);
   const sweepInFlightRef = useRef(false);
+  const sweepCursorRef = useRef(0);
   const lastLocalSweepRef = useRef(0);
   // Set if the shared price doc can't be read or written — most likely because
   // the Firestore rules don't cover `market/prices` yet. Clients then fall back
@@ -1086,17 +1087,27 @@ export default function FiveStarApp() {
     const newData = { ...liveMarketData };
     let hasUpdates = false;
 
-    for (const ticker of trackedTickers) {
+    // A rate limit cuts the sweep short. Always starting at the top of the list
+    // means the same tail is never reached, so its stale quotes get republished
+    // every cycle and read as current. Resume where the last sweep stopped.
+    const n = trackedTickers.length;
+    const start = n ? sweepCursorRef.current % n : 0;
+    const order = [...trackedTickers.slice(start), ...trackedTickers.slice(0, start)];
+    let reached = 0;
+
+    for (const ticker of order) {
       try {
         await sleep(1100);
         const quoteRes = await fetch(`https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${FINNHUB_API_KEY}`);
 
         if (quoteRes.status === 429) {
-          // Back off for a full minute rather than burning the rest of the sweep.
+          // Back off for a full minute. This ticker isn't counted as reached, so
+          // the next sweep starts here rather than losing it again.
           rateLimitedUntilRef.current = Date.now() + 60000;
           console.warn('Finnhub rate limit hit — keeping last known prices for this cycle.');
           break;
         }
+        reached++;
 
         const quoteData = await quoteRes.json();
         const price = Number(quoteData.c);
@@ -1115,15 +1126,19 @@ export default function FiveStarApp() {
 
         // `pc` is the previous close — keep it so we can show today's move.
         // Finnhub also sends `dp` (day change %); prefer it when present.
+        // `t` stamps the session the quote belongs to, which is the only way to
+        // tell a live reading from one left over from an earlier day.
         newData[ticker] = {
           c: price,
           monthOpen,
           pc: prevClose > 0 ? prevClose : null,
           dp: Number.isFinite(Number(quoteData.dp)) ? Number(quoteData.dp) : null,
+          t: Number(quoteData.t) || null,
         };
         hasUpdates = true;
-      } catch (err) { console.error(`Error fetching ${ticker}:`, err); }
+      } catch (err) { reached++; console.error(`Error fetching ${ticker}:`, err); }
     }
+    if (n) sweepCursorRef.current = (start + reached) % n;
     return hasUpdates ? newData : null;
   };
 
@@ -1588,6 +1603,16 @@ export default function FiveStarApp() {
 
   const hasPrice = (stockId) => priceOf(stockId) > 0;
 
+  // Finnhub stamps every quote with the trade time it reflects, and `dp` is the
+  // move during *that* session. A quote left over from an earlier day therefore
+  // carries that day's change — reporting it as "today" is how a stale ticker
+  // claims an 8% move it never had. No stamp means it predates this check.
+  const quoteIsToday = (quote) => {
+      const t = Number(quote?.t);
+      if (!t) return false;
+      return dayKey(new Date(t * 1000)) === dayKey();
+  };
+
   const portfolioValueOf = (player) => {
       let total = parseFloat(player?.cash) || 0;
       (player?.roster || []).forEach(item => {
@@ -1606,8 +1631,11 @@ export default function FiveStarApp() {
       let priced = false;
       (player?.roster || []).forEach(item => {
           const shares = parseFloat(item.shares) || 0;
-          const now = Number(liveMarketData[item.id]?.c) || 0;
-          const prev = Number(liveMarketData[item.id]?.pc) || 0;
+          // A quote from an earlier session says nothing about today, so the
+          // holding is carried flat rather than contributing a stale move.
+          const quote = quoteIsToday(liveMarketData[item.id]) ? liveMarketData[item.id] : null;
+          const now = Number(quote?.c) || 0;
+          const prev = Number(quote?.pc) || 0;
           if (now > 0 && prev > 0) {
               priced = true;
               today += shares * now;
@@ -2748,9 +2776,12 @@ export default function FiveStarApp() {
 
       // Today's move: Finnhub's own day-change percent, else derived from the
       // previous close. Null until a quote with `pc`/`dp` has been fetched.
-      const prevClose = Number(live?.pc) || 0;
-      const dayChange = Number.isFinite(Number(live?.dp)) && live?.dp !== null
-          ? Number(live.dp)
+      // A quote from an earlier session carries that session's move, so it is not
+      // a figure for today and the Top 5 boards must not rank it as one.
+      const today = quoteIsToday(live) ? live : null;
+      const prevClose = Number(today?.pc) || 0;
+      const dayChange = Number.isFinite(Number(today?.dp)) && today?.dp !== null
+          ? Number(today.dp)
           : (price > 0 && prevClose > 0 ? ((price - prevClose) / prevClose) * 100 : null);
 
       const inRoster = activeMembership?.roster?.find((i) => i.id === stock.id);
@@ -3148,12 +3179,14 @@ export default function FiveStarApp() {
         // frozen book is a record of a day that closed long ago, so it gets none.
         const dayIn = (id) => {
             if (snap) return null;
+            const quote = liveMarketData[id];
+            if (!quoteIsToday(quote)) return null;
             // A sweep stores dp:null when Finnhub omits it, and Number(null) is 0
             // — test the raw value or an absent reading reports a flat day.
-            const dp = liveMarketData[id]?.dp;
+            const dp = quote?.dp;
             if (dp !== null && dp !== undefined && Number.isFinite(Number(dp))) return Number(dp);
-            const now = Number(liveMarketData[id]?.c);
-            const prev = Number(liveMarketData[id]?.pc);
+            const now = Number(quote?.c);
+            const prev = Number(quote?.pc);
             return now > 0 && prev > 0 ? ((now - prev) / prev) * 100 : null;
         };
 
