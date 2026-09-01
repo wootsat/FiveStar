@@ -67,6 +67,26 @@ That -15.86% is the worst single month the league has on record, and it belongs 
 Omaha move to 3-0, which is the genuinely strange part. They are the only undefeated team in the league and they got there in July by handing back nearly a tenth of the portfolio. Nobody is putting that on a banner. It counts the same in the standings. The Giants drop to 1-2.`,
       },
     ],
+    '2026-08': [
+      {
+        teams: ['YOLO Kings', 'Investment Giants'],
+        title: 'Cash Does Not Compound',
+        text: `The YOLO Kings took August +2.44% to -1.93%, a four-and-a-half point margin in a month that asked very little of anybody. After July's carnage, a quiet one was probably welcome.
+
+The difference was not really stock picking. The Investment Giants went into the month holding $2,193.78 in cash — close to a third of the entire book — while the Kings ran a balance of sixty-three cents. One team was playing the month and the other was watching a good chunk of it from the sidelines. What the Giants did have invested went the wrong way too: Google and GE Vernova, both franchise picks, both down, and their one real gainer was the smallest position they owned.
+
+The Kings leaned on Nvidia, which is nearly two-fifths of their book and had a good August, and let the rest tick along behind it. That is 3-1 for the Kings, who have quietly put together the second-best record in the league. The Giants slide to 1-3.`,
+      },
+      {
+        teams: ['Omaha Lions', 'Wolf Lady'],
+        title: 'Right Stocks, Wrong Sizes',
+        text: `Wolf Lady owned the two best-performing stocks in the league in August. MicroStrategy finished up 35.24% and Robinhood up 20.56%, and nobody else came within fifteen points of either. Wolf Lady lost.
+
+Between them those two positions were about $608 of a $7,700 book — call it eight percent. Nearly half the portfolio sat in Apple instead, which had a perfectly respectable month and nothing more. Omaha had exactly the opposite arrangement: their three largest holdings all rose, led by Micron at +15.56%, and the only position that fell was the smallest thing they owned. Same idea, opposite execution, and 8.39% to 5.72% is where it landed.
+
+The Lions are 4-0 and have now won a month by being less wrong than everyone else and a month by being straightforwardly good, which is a worrying range. Wolf Lady drop to 0-4, and this is the one that will actually sting — 5.72% is a good month in this league. They have been beaten while playing badly and now beaten while playing well. There is not much left to try.`,
+      },
+    ],
   },
 };
 
