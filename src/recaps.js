@@ -87,6 +87,26 @@ Between them those two positions were about $608 of a $7,700 book — call it ei
 The Lions are 4-0 and have now won a month by being less wrong than everyone else and a month by being straightforwardly good, which is a worrying range. Wolf Lady drop to 0-4, and this is the one that will actually sting — 5.72% is a good month in this league. They have been beaten while playing badly and now beaten while playing well. There is not much left to try.`,
       },
     ],
+    '2026-09': [
+      {
+        teams: ['Omaha Lions', 'YOLO Kings'],
+        title: 'Top Seed, Two Months Early',
+        text: `September was the first month all season in which every team finished in the black, and Omaha still won by more than fourteen points. +17.41% against the Kings' +2.98%. In most months of this season a shade under three percent would have been a respectable afternoon's work; here it was never remotely in the conversation.
+
+That is Omaha's third double-digit month out of five and it takes them to 5-0. With two games left nobody can reach them — the most anyone else can finish with is five wins, and Omaha carry a season points total of +91.74 against the next best +6.94, so every tiebreak is theirs too. The top seed is settled with two months still to play, and whoever takes second will have to go through them in December.
+
+The Kings slip to 3-2. They still hold the only other seat that matters, but the gap behind them is down to a single game.`,
+      },
+      {
+        teams: ['Investment Giants', 'Wolf Lady'],
+        title: 'Green, and Beaten Anyway',
+        text: `+7.33% to +4.05%, and both of those are perfectly decent numbers. September was the first month this season in which all four teams gained, which made it an unfortunate month to be the one that gained least.
+
+For the Giants it is a second win, their best month of the season, and both of their victories have now come against the same opponent. They move to 2-3 and sit one game off second with two to play — a considerably better place than a -15.86% July suggested they would ever see again.
+
+Wolf Lady are 0-5. They have now posted back-to-back positive months, +5.72% in August and +4.05% here, and lost both. There is no longer a version of this where they are playing badly. They are simply being outscored, every single month, by whoever happens to be sitting across from them.`,
+      },
+    ],
   },
 };
 
