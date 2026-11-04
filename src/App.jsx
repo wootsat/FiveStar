@@ -1074,11 +1074,19 @@ export default function FiveStarApp() {
 
   // --- 3. Real-time Data ---
 
-  // Price only what this league can actually trade — the global catalogue grows
-  // with every league and Finnhub is rate limited.
-  const trackedTickers = activeLeague?.stockPool?.length
+  // Price only what this league can trade or already holds — the global catalogue
+  // grows with every league and Finnhub is rate limited.
+  //
+  // The pool decides what can be *bought*, not what has to be *priced*. A ticker
+  // the commissioner drops from the pool can still sit in someone's book, and if
+  // nothing fetched it any more that position would be scored at a frozen price
+  // for the rest of the month — so every held ticker is tracked as well.
+  const poolTickers = activeLeague?.stockPool?.length
     ? activeLeague.stockPool
     : masterStocks.map(s => s.id);
+  const heldTickers = leaguePlayers.flatMap(p =>
+    (p.roster || []).filter(i => (parseFloat(i.shares) || 0) > 0).map(i => i.id));
+  const trackedTickers = [...new Set([...poolTickers, ...heldTickers])];
 
   // One pass over the pool, merged onto the prices we already hold. Returns the
   // merged map, or null when nothing usable came back. Never publishes — the
@@ -1968,7 +1976,9 @@ export default function FiveStarApp() {
       // this closure yet, and these prices become the month's baseline.
       const fresh = (await refreshPrices({ force: true })) || liveMarketData;
       const allowance = Number(activeLeague.monthlyAllowance) || 0;
-      const pool = activeLeague.stockPool || [];
+      // Held tickers that have since left the pool still need an opening price —
+      // the baseline fallback below would otherwise value them at nothing.
+      const pool = trackedTickers;
 
       // A base price of 0 would make every holding of that ticker score as a total
       // loss, so carry the last good price forward and never write a zero.
@@ -2062,7 +2072,9 @@ export default function FiveStarApp() {
       // team's book. Rosters keep changing after this, so the recap writer has
       // no other way to describe a past month accurately.
       const closingPrices = {};
-      (activeLeague.stockPool || []).forEach(id => {
+      // Every held ticker, not just the pool, or a closed month's book would show
+      // a dropped stock at $0 even though it counted toward the team's value.
+      trackedTickers.forEach(id => {
           const price = priceOf(id);
           if (price > 0) closingPrices[id] = price;
       });
